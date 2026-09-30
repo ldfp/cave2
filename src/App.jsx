@@ -10,6 +10,7 @@ function App() {
 
   // Form State
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [selectedBottle, setSelectedBottle] = useState(null)
   const [newBottle, setNewBottle] = useState({
     'Domaine / Propriété': '',
     'Cuvée / Style': '',
@@ -183,7 +184,7 @@ function App() {
                 <div key={bottle.id} className="bottle-item">
                   <div className="bottle-main-content">
                     {bottle.image ? (
-                      <div className="bottle-image-container">
+                      <div className="bottle-image-container" onClick={() => setSelectedBottle(bottle)} style={{ cursor: 'pointer' }} title="Cliquez pour agrandir">
                         <img src={bottle.image} alt={bottle['Domaine / Propriété']} className="bottle-image" />
                       </div>
                     ) : (
@@ -330,6 +331,45 @@ function App() {
           </div>
         </div>
       )}
+      {/* Modal Image Agrandie */}
+      {selectedBottle && (
+        <div className="modal-overlay" onClick={() => setSelectedBottle(null)}>
+          <div className="modal-content glass-panel" style={{ maxWidth: '500px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+            <button className="close-btn" onClick={() => setSelectedBottle(null)}>&times;</button>
+            <h2>Photo : {selectedBottle['Domaine / Propriété']}</h2>
+            <div style={{ margin: '20px 0' }}>
+              <img 
+                src={selectedBottle.image} 
+                alt={selectedBottle['Domaine / Propriété']} 
+                style={{ maxWidth: '100%', maxHeight: '60vh', borderRadius: '8px', objectFit: 'contain' }} 
+              />
+            </div>
+            <div>
+              <label htmlFor="replace-photo-modal" className="add-btn" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                Remplacer la photo
+              </label>
+              <input 
+                id="replace-photo-modal"
+                type="file" 
+                accept="image/*" 
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  handleExistingImageUpload(e, selectedBottle.id);
+                  const file = e.target.files[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      setSelectedBottle(prev => ({ ...prev, image: reader.result }));
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
