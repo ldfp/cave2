@@ -1,0 +1,95 @@
+{
+  "bottles": [
+    {
+      "Domaine / Propriété": "Edouard Leiber",
+      "Cuvée / Style": "Grande Réserve",
+      "Cépage(s)": "Gewurztraminer",
+      "Appellation / IGP": "Alsace",
+      "Région": "Alsace",
+      "Millésime": 2024,
+      "Type de vin": "Blanc aromatique",
+      "Quantité": 4,
+      "__EMPTY": 1
+    },
+    {
+      "Domaine / Propriété": "Uby",
+      "Cuvée / Style": "N°3",
+      "Cépage(s)": "Colombard, Sauvignon",
+      "Appellation / IGP": "Côtes de Gascogne IGP",
+      "Région": "Sud-Ouest",
+      "Millésime": "Non visible",
+      "Type de vin": "Blanc sec et vif",
+      "Quantité": 1
+    },
+    {
+      "Domaine / Propriété": "Roland Tissier et Fils",
+      "Cuvée / Style": "Étincelle",
+      "Cépage(s)": "Sauvignon Blanc",
+      "Appellation / IGP": "Sancerre",
+      "Région": "Vallée de la Loire",
+      "Millésime": "Non visible",
+      "Type de vin": "Blanc sec et minéral",
+      "Quantité": 1
+    },
+    {
+      "Domaine / Propriété": "Lionel Osmin & Cie",
+      "Cuvée / Style": "Chambre d'Amour (L'Original)",
+      "Cépage(s)": "Assemblage Sud-Ouest",
+      "Appellation / IGP": "Vin du Sud-Ouest",
+      "Région": "Sud-Ouest",
+      "Millésime": 2024,
+      "Type de vin": "Blanc doux et fruité",
+      "Quantité": 1
+    },
+    {
+      "Domaine / Propriété": "Les Souterrains",
+      "Cuvée / Style": "Touraine Sauvignon",
+      "Cépage(s)": "Sauvignon",
+      "Appellation / IGP": "Touraine Contrôlée",
+      "Région": "Vallée de la Loire",
+      "Millésime": 2023,
+      "Type de vin": "Blanc sec et frais",
+      "Quantité": 1
+    },
+    {
+      "Domaine / Propriété": "Winemaker's Notes",
+      "Cuvée / Style": "Smooth & Full Bodied",
+      "Cépage(s)": "Chardonnay, Colombard",
+      "Appellation / IGP": "Western Cape",
+      "Région": "Afrique du Sud",
+      "Millésime": 2025,
+      "Type de vin": "Blanc ample et rond",
+      "Quantité": 1
+    },
+    {
+      "Domaine / Propriété": "Abbazia",
+      "Cuvée / Style": "Prosecco Extra Dry (Strobe)",
+      "Cépage(s)": "Glera",
+      "Appellation / IGP": "Prosecco DOC",
+      "Région": "Vénétie, Italie",
+      "Millésime": "Non millésimé",
+      "Type de vin": "Effervescent / Mousseux",
+      "Quantité": 1
+    },
+    {
+      "Domaine / Propriété": "Champagne Francis Cossy",
+      "Cuvée / Style": "Premier Cru Demi-Sec",
+      "Cépage(s)": "Assemblage Champenois",
+      "Appellation / IGP": "Champagne Premier Cru",
+      "Région": "Champagne, France",
+      "Millésime": "Non millésimé",
+      "Type de vin": "Champagne effervescent",
+      "Quantité": 1
+    },
+    {
+      "Domaine / Propriété": "Champagne Boissellier",
+      "Cuvée / Style": "Brut Premier Cru",
+      "Cépage(s)": "Pinot Noir, Chardonnay, etc.",
+      "Appellation / IGP": "Champagne Premier Cru",
+      "Région": "Champagne, France",
+      "Millésime": "Non millésimé",
+      "Type de vin": "Champagne effervescent",
+      "Quantité": 1
+    }
+  ]
+}
