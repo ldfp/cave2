@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
+import localforage from 'localforage'
 import dbData from './db.json'
 import './App.css'
 
 function App() {
   const [bottles, setBottles] = useState([])
+  const [isLoaded, setIsLoaded] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [regionFilter, setRegionFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
@@ -23,13 +25,31 @@ function App() {
   })
 
   useEffect(() => {
-    // Add unique IDs to the initial data for easier updates
-    const initialData = (dbData.bottles || []).map((b, index) => ({
-      ...b,
-      id: `initial-${index}`
-    }))
-    setBottles(initialData)
+    const loadData = async () => {
+      try {
+        const storedBottles = await localforage.getItem('caveBottles')
+        if (storedBottles) {
+          setBottles(storedBottles)
+        } else {
+          const initialData = (dbData.bottles || []).map((b, index) => ({
+            ...b,
+            id: `initial-${index}`
+          }))
+          setBottles(initialData)
+        }
+      } catch (err) {
+        console.error("Erreur de chargement", err)
+      }
+      setIsLoaded(true)
+    }
+    loadData()
   }, [])
+
+  useEffect(() => {
+    if (isLoaded) {
+      localforage.setItem('caveBottles', bottles).catch(err => console.error("Erreur de sauvegarde", err))
+    }
+  }, [bottles, isLoaded])
 
   // Options for filters
   const regions = useMemo(() => {
