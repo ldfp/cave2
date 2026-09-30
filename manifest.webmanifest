@@ -1,0 +1,1 @@
+{"name":"Ma Cave à Vin","short_name":"Cave","description":"Gestion de ma cave à vin","start_url":"/cave2/","display":"standalone","background_color":"#1e1b4b","theme_color":"#8b5cf6","lang":"en","scope":"/cave2/","icons":[{"src":"icon.svg","sizes":"192x192 512x512","type":"image/svg+xml","purpose":"any maskable"}]}
