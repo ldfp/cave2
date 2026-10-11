@@ -29,6 +29,8 @@ function App() {
 
   // Lightbox / Zoom State
   const [selectedPhotoBottle, setSelectedPhotoBottle] = useState(null)
+  const [isZoomed, setIsZoomed] = useState(false)
+  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 })
 
   // Status message (toast)
   const [toastMessage, setToastMessage] = useState(null)
@@ -44,7 +46,6 @@ function App() {
       try {
         const stored = await localforage.getItem(STORAGE_KEY)
         if (stored && Array.isArray(stored) && stored.length > 0) {
-          // Normalize photo / image fields
           const normalized = stored.map(b => ({
             ...b,
             photo: b.photo || b.image || null
@@ -54,7 +55,7 @@ function App() {
           return
         }
 
-        // Check fallback in localStorage
+        // Fallback localStorage
         const localSaved = localStorage.getItem(STORAGE_KEY)
         if (localSaved) {
           const parsed = JSON.parse(localSaved)
@@ -65,7 +66,7 @@ function App() {
           }
         }
       } catch (err) {
-        console.error('Erreur chargement données stockées:', err)
+        console.error('Erreur chargement données:', err)
       }
 
       // Default initial from dbData
@@ -95,7 +96,7 @@ function App() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(bottles))
       } catch (err) {
-        // LocalStorage may exceed quota if photos are very large; localforage handles it
+        // Safe to ignore if quota reached, localforage persists the full dataset
       }
     }
 
@@ -156,7 +157,7 @@ function App() {
       if (selectedPhotoBottle && selectedPhotoBottle.id === bottleId) {
         setSelectedPhotoBottle(prev => ({ ...prev, photo: compressedDataUrl, image: compressedDataUrl }))
       }
-      showToast('📸 Photo enregistrée avec succès !')
+      showToast('📸 Photo haute définition enregistrée !')
     } catch (err) {
       console.error(err)
       showToast('❌ Erreur lors du chargement de la photo.')
@@ -262,6 +263,20 @@ function App() {
     return 'theme-autre'
   }
 
+  // Interactive zoom handlers
+  const handleImageMouseMove = (e) => {
+    if (!isZoomed) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100))
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100))
+    setZoomOrigin({ x, y })
+  }
+
+  const openLightbox = (bottle) => {
+    setSelectedPhotoBottle(bottle)
+    setIsZoomed(false)
+  }
+
   return (
     <div className="app-container">
       {/* Toast Notification */}
@@ -300,7 +315,7 @@ function App() {
         <section className="recent-bottles glass-panel">
           <div className="section-header">
             <h2>Mon Inventaire</h2>
-            <span className="hint-pill">💡 Cliquez sur la photo d'une bouteille pour la modifier ou l'agrandir</span>
+            <span className="hint-pill">💡 Cliquez sur la photo d'une bouteille pour l'agrandir et zoomer sur l'étiquette</span>
           </div>
           
           <div className="filters-container">
@@ -358,17 +373,17 @@ function App() {
                       onChange={(e) => handlePhotoFileChange(bottle.id, e)}
                     />
 
-                    {/* Bottle Photo / Thumbnail Section */}
+                    {/* Bottle Photo Container - Tall bottle portrait format */}
                     <div 
                       className={`bottle-photo-container ${bottleImg ? 'has-photo' : 'no-photo'}`}
                       onClick={(e) => {
                         if (bottleImg) {
-                          setSelectedPhotoBottle(bottle)
+                          openLightbox(bottle)
                         } else {
                           triggerFileInput(bottle.id, e)
                         }
                       }}
-                      title={bottleImg ? "Cliquez pour agrandir ou remplacer" : "Cliquez pour ajouter une photo"}
+                      title={bottleImg ? "Cliquez pour agrandir et lire l'étiquette" : "Cliquez pour ajouter une photo"}
                     >
                       {bottleImg ? (
                         <>
@@ -427,14 +442,23 @@ function App() {
                           📷 {bottleImg ? 'Remplacer la photo' : 'Ajouter une photo'}
                         </button>
                         {bottleImg && (
-                          <button 
-                            type="button" 
-                            className="quick-remove-photo-btn"
-                            onClick={(e) => handleRemovePhoto(bottle.id, e)}
-                            title="Supprimer la photo actuelle"
-                          >
-                            🗑️ Supprimer la photo
-                          </button>
+                          <>
+                            <button 
+                              type="button" 
+                              className="quick-photo-btn view-btn"
+                              onClick={() => openLightbox(bottle)}
+                            >
+                              🔍 Agrandir l'étiquette
+                            </button>
+                            <button 
+                              type="button" 
+                              className="quick-remove-photo-btn"
+                              onClick={(e) => handleRemovePhoto(bottle.id, e)}
+                              title="Supprimer la photo actuelle"
+                            >
+                              🗑️ Supprimer
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -476,39 +500,77 @@ function App() {
         </section>
       </main>
 
-      {/* Lightbox / Zoom Modal */}
+      {/* Lightbox / High-Resolution Zoom Modal */}
       {selectedPhotoBottle && (
         <div className="modal-overlay" onClick={() => setSelectedPhotoBottle(null)}>
           <div className="modal-content lightbox-content glass-panel" onClick={(e) => e.stopPropagation()}>
             <button className="close-btn" onClick={() => setSelectedPhotoBottle(null)}>&times;</button>
             
             <div className="lightbox-body">
-              <div className="lightbox-image-container">
-                {(selectedPhotoBottle.photo || selectedPhotoBottle.image) ? (
-                  <img 
-                    src={selectedPhotoBottle.photo || selectedPhotoBottle.image} 
-                    alt={selectedPhotoBottle['Domaine / Propriété']} 
-                    className="lightbox-img"
-                  />
-                ) : (
-                  <div className="lightbox-no-image">
-                    <span>Aucune photo</span>
+              <div className="lightbox-image-section">
+                <div 
+                  className={`lightbox-image-container ${isZoomed ? 'zoomed' : ''}`}
+                  onMouseMove={handleImageMouseMove}
+                  onClick={() => setIsZoomed(!isZoomed)}
+                  title={isZoomed ? "Cliquez pour dézoomer" : "Cliquez ou survolez pour zoomer sur les détails de l'étiquette"}
+                >
+                  {(selectedPhotoBottle.photo || selectedPhotoBottle.image) ? (
+                    <img 
+                      src={selectedPhotoBottle.photo || selectedPhotoBottle.image} 
+                      alt={selectedPhotoBottle['Domaine / Propriété']} 
+                      className="lightbox-img"
+                      style={
+                        isZoomed
+                          ? {
+                              transform: 'scale(2.4)',
+                              transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                              cursor: 'zoom-out'
+                            }
+                          : { cursor: 'zoom-in' }
+                      }
+                    />
+                  ) : (
+                    <div className="lightbox-no-image">
+                      <span>Aucune photo</span>
+                    </div>
+                  )}
+
+                  {/* Zoom hint badge */}
+                  {(selectedPhotoBottle.photo || selectedPhotoBottle.image) && (
+                    <div className="zoom-hint-badge">
+                      {isZoomed ? '🔍 Mode Zoom x2.4 actif (déplacez la souris)' : '🔍 Cliquez sur l\'image pour zoomer sur l\'étiquette'}
+                    </div>
+                  )}
+                </div>
+
+                {/* Zoom controls */}
+                {(selectedPhotoBottle.photo || selectedPhotoBottle.image) && (
+                  <div className="zoom-controls-bar">
+                    <button 
+                      type="button" 
+                      className={`zoom-toggle-btn ${isZoomed ? 'active' : ''}`}
+                      onClick={() => setIsZoomed(!isZoomed)}
+                    >
+                      {isZoomed ? '🔎 Réinitialiser le zoom (1x)' : '🔍 Zoomer sur l\'étiquette (x2.4)'}
+                    </button>
                   </div>
                 )}
               </div>
 
               <div className="lightbox-details">
-                <h3>{selectedPhotoBottle['Domaine / Propriété']}</h3>
-                {selectedPhotoBottle['Cuvée / Style'] && (
-                  <p className="lightbox-cuvee">{selectedPhotoBottle['Cuvée / Style']}</p>
-                )}
-                
-                <div className="lightbox-info-list">
-                  <div><strong>Millésime :</strong> {selectedPhotoBottle['Millésime'] || 'Non précisé'}</div>
-                  <div><strong>Appellation :</strong> {selectedPhotoBottle['Appellation / IGP'] || '—'}</div>
-                  <div><strong>Région :</strong> {selectedPhotoBottle['Région'] || '—'}</div>
-                  <div><strong>Type :</strong> {selectedPhotoBottle['Type de vin'] || '—'}</div>
-                  <div><strong>Stock actuel :</strong> {selectedPhotoBottle['Quantité']} bouteille(s)</div>
+                <div>
+                  <h3>{selectedPhotoBottle['Domaine / Propriété']}</h3>
+                  {selectedPhotoBottle['Cuvée / Style'] && (
+                    <p className="lightbox-cuvee">{selectedPhotoBottle['Cuvée / Style']}</p>
+                  )}
+                  
+                  <div className="lightbox-info-list">
+                    <div><strong>Millésime :</strong> {selectedPhotoBottle['Millésime'] || 'Non précisé'}</div>
+                    <div><strong>Appellation :</strong> {selectedPhotoBottle['Appellation / IGP'] || '—'}</div>
+                    <div><strong>Région :</strong> {selectedPhotoBottle['Région'] || '—'}</div>
+                    <div><strong>Type de vin :</strong> {selectedPhotoBottle['Type de vin'] || '—'}</div>
+                    <div><strong>Stock en cave :</strong> {selectedPhotoBottle['Quantité']} bouteille(s)</div>
+                  </div>
                 </div>
 
                 {/* Hidden input in lightbox */}
@@ -554,7 +616,7 @@ function App() {
             <form onSubmit={handleAddBottle}>
               {/* Photo Upload in Add Form */}
               <div className="form-group form-photo-upload-group">
-                <label>Photo de la bouteille (optionnel)</label>
+                <label>Photo de la bouteille (optionnel - haute résolution)</label>
                 <div className="form-photo-upload-container">
                   {formPhotoPreview ? (
                     <div className="form-photo-preview-box">
@@ -583,7 +645,7 @@ function App() {
                     >
                       <span className="dropzone-icon">📷</span>
                       <span>Cliquez pour choisir une photo de la bouteille</span>
-                      <small className="dropzone-hint">Format JPEG ou PNG (automatiquement optimisé)</small>
+                      <small className="dropzone-hint">Format JPEG ou PNG (lisibilité nette de l'étiquette conservée)</small>
                     </div>
                   )}
                   <input 
@@ -601,7 +663,7 @@ function App() {
                 <input 
                   type="text" 
                   required
-                  placeholder="Ex: Château Margaux"
+                  placeholder="Ex: Champagne Francis Cossy"
                   value={newBottle['Domaine / Propriété']} 
                   onChange={(e) => handleFormChange('Domaine / Propriété', e.target.value)}
                 />
@@ -611,7 +673,7 @@ function App() {
                 <label>Cuvée / Style</label>
                 <input 
                   type="text" 
-                  placeholder="Ex: Grand Cru Classé"
+                  placeholder="Ex: Brut Premier Cru"
                   value={newBottle['Cuvée / Style']} 
                   onChange={(e) => handleFormChange('Cuvée / Style', e.target.value)}
                 />
@@ -622,7 +684,7 @@ function App() {
                   <label>Région</label>
                   <input 
                     type="text" 
-                    placeholder="Ex: Bordeaux"
+                    placeholder="Ex: Champagne"
                     value={newBottle['Région']} 
                     onChange={(e) => handleFormChange('Région', e.target.value)}
                   />
@@ -631,7 +693,7 @@ function App() {
                   <label>Appellation / IGP</label>
                   <input 
                     type="text" 
-                    placeholder="Ex: Margaux"
+                    placeholder="Ex: Champagne AOC"
                     value={newBottle['Appellation / IGP']} 
                     onChange={(e) => handleFormChange('Appellation / IGP', e.target.value)}
                   />
@@ -643,7 +705,7 @@ function App() {
                   <label>Type de vin</label>
                   <input 
                     type="text" 
-                    placeholder="Ex: Rouge, Blanc sec, etc."
+                    placeholder="Ex: Champagne, Blanc, Rouge..."
                     value={newBottle['Type de vin']} 
                     onChange={(e) => handleFormChange('Type de vin', e.target.value)}
                   />
