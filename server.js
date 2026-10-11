@@ -1,6 +1,8 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -38,11 +40,35 @@ const MIME_TYPES = {
   '.eot': 'application/vnd.ms-fontobject'
 };
 
+// Compute SHA-256 hash of dataset to check for changes
+function computeDatasetHash(bottles) {
+  if (!Array.isArray(bottles)) return '';
+  const hash = crypto.createHash('sha256');
+  for (const b of bottles) {
+    hash.update(String(b.id || ''));
+    hash.update(String(b['Domaine / Propriété'] || ''));
+    hash.update(String(b['Cuvée / Style'] || ''));
+    hash.update(String(b['Appellation / IGP'] || ''));
+    hash.update(String(b['Région'] || ''));
+    hash.update(String(b['Type de vin'] || ''));
+    hash.update(String(b['Millésime'] || ''));
+    hash.update(String(b['Quantité'] || 0));
+    // Include photo if present
+    const photo = b.photo || b.image;
+    if (photo) {
+      hash.update(photo.slice(0, 100));
+      hash.update(String(photo.length));
+      hash.update(photo.slice(-100));
+    }
+  }
+  return hash.digest('hex');
+}
+
 const server = http.createServer((req, res) => {
   // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Content-Encoding, If-None-Match');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -55,46 +81,85 @@ const server = http.createServer((req, res) => {
 
   // API : Sauvegarder sur le serveur
   if (pathname === '/api/backup' && req.method === 'POST') {
-    let body = '';
+    const chunks = [];
+    let receivedBytes = 0;
+
     req.on('data', chunk => {
-      body += chunk;
-      // Protection contre les payloads délirants (> 150MB)
-      if (body.length > 150 * 1024 * 1024) {
+      receivedBytes += chunk.length;
+      if (receivedBytes > 150 * 1024 * 1024) {
         res.writeHead(413, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Payload trop volumineux' }));
         req.destroy();
+        return;
       }
+      chunks.push(chunk);
     });
 
     req.on('end', () => {
       try {
-        const payload = JSON.parse(body);
+        const rawBuffer = Buffer.concat(chunks);
+        let jsonStr = '';
+
+        // Décompression à la volée si envoyé en gzip
+        if (req.headers['content-encoding'] === 'gzip') {
+          jsonStr = zlib.gunzipSync(rawBuffer).toString('utf-8');
+        } else {
+          jsonStr = rawBuffer.toString('utf-8');
+        }
+
+        const payload = JSON.parse(jsonStr);
+
+        // Nettoyage et déduplication des photos (suppression du champ b.image dupliqué si b.photo existe)
+        const cleanedBottles = (payload.bottles || []).map(b => {
+          const item = { ...b };
+          const p = item.photo || item.image;
+          if (p) {
+            item.photo = p;
+          }
+          delete item.image; // Évite de doubler le poids en mémoire
+          return item;
+        });
+
+        // Vérifier si des modifications ont eu lieu par rapport au fichier existant
+        let previousHash = '';
+        if (fs.existsSync(BACKUP_FILE)) {
+          try {
+            const existingData = JSON.parse(fs.readFileSync(BACKUP_FILE, 'utf-8'));
+            previousHash = computeDatasetHash(existingData.bottles);
+          } catch (e) {}
+        }
+
+        const currentHash = computeDatasetHash(cleanedBottles);
+        const hasChanged = previousHash !== currentHash;
+
         const dataToSave = {
           savedAt: new Date().toISOString(),
-          bottlesCount: Array.isArray(payload.bottles) ? payload.bottles.length : 0,
-          bottles: payload.bottles || [],
-          version: '1.0'
+          bottlesCount: cleanedBottles.length,
+          bottles: cleanedBottles,
+          version: '1.1'
         };
 
-        // Écriture du fichier principal
-        fs.writeFileSync(BACKUP_FILE, JSON.stringify(dataToSave, null, 2), 'utf-8');
+        // Écriture du fichier principal (format compact sans indentations superflues pour un gain de temps I/O)
+        fs.writeFileSync(BACKUP_FILE, JSON.stringify(dataToSave), 'utf-8');
 
-        // Écriture d'une copie horodatée dans l'historique
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const historyFile = path.join(BACKUPS_HISTORY_DIR, `backup_${timestamp}.json`);
-        fs.writeFileSync(historyFile, JSON.stringify(dataToSave), 'utf-8');
+        // N'écrire dans l'historique que si les données ont réellement changé
+        if (hasChanged) {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const historyFile = path.join(BACKUPS_HISTORY_DIR, `backup_${timestamp}.json`);
+          fs.writeFileSync(historyFile, JSON.stringify(dataToSave), 'utf-8');
 
-        // Nettoyage historique : garder les 20 plus récentes sauvegardes
-        try {
-          const files = fs.readdirSync(BACKUPS_HISTORY_DIR)
-            .filter(f => f.startsWith('backup_') && f.endsWith('.json'))
-            .sort()
-            .reverse();
-          if (files.length > 20) {
-            files.slice(20).forEach(f => fs.unlinkSync(path.join(BACKUPS_HISTORY_DIR, f)));
+          // Nettoyage historique : garder les 20 plus récentes sauvegardes
+          try {
+            const files = fs.readdirSync(BACKUPS_HISTORY_DIR)
+              .filter(f => f.startsWith('backup_') && f.endsWith('.json'))
+              .sort()
+              .reverse();
+            if (files.length > 20) {
+              files.slice(20).forEach(f => fs.unlinkSync(path.join(BACKUPS_HISTORY_DIR, f)));
+            }
+          } catch (cleanupErr) {
+            console.error('Erreur nettoyage historique:', cleanupErr);
           }
-        } catch (cleanupErr) {
-          console.error('Erreur nettoyage historique:', cleanupErr);
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -102,12 +167,13 @@ const server = http.createServer((req, res) => {
           success: true,
           message: 'Sauvegarde enregistrée avec succès sur le serveur',
           savedAt: dataToSave.savedAt,
-          bottlesCount: dataToSave.bottlesCount
+          bottlesCount: dataToSave.bottlesCount,
+          unchanged: !hasChanged
         }));
       } catch (err) {
         console.error('Erreur sauvegarde:', err);
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Données JSON invalides' }));
+        res.end(JSON.stringify({ error: `Erreur traitement: ${err.message}` }));
       }
     });
     return;
@@ -117,9 +183,25 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/backup' && req.method === 'GET') {
     if (fs.existsSync(BACKUP_FILE)) {
       try {
-        const content = fs.readFileSync(BACKUP_FILE, 'utf-8');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(content);
+        const fileBuffer = fs.readFileSync(BACKUP_FILE);
+        const acceptEncoding = req.headers['accept-encoding'] || '';
+
+        // Si le client supporte gzip, compresser la réponse pour un chargement ultra-rapide
+        if (acceptEncoding.includes('gzip')) {
+          const gzipped = zlib.gzipSync(fileBuffer);
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Content-Encoding': 'gzip',
+            'Cache-Control': 'no-cache'
+          });
+          res.end(gzipped);
+        } else {
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-cache'
+          });
+          res.end(fileBuffer);
+        }
         return;
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });

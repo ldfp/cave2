@@ -183,15 +183,17 @@ function App() {
     }, 4000)
   }
 
-  // Save to Server
+  // Save to Server with performance timing
   const handleSaveToServer = async () => {
     setIsSavingServer(true)
+    const startTime = Date.now()
     try {
       const res = await sendBackupToServer(bottles)
+      const durationSec = ((Date.now() - startTime) / 1000).toFixed(1)
       const saveDate = res.savedAt || new Date().toISOString()
       setLastServerBackup(saveDate)
       localStorage.setItem(LAST_BACKUP_STORAGE, saveDate)
-      showToast(`💾 Sauvegarde réussie sur le serveur ! (${bottles.length} bouteilles & photos persistées)`)
+      showToast(`⚡ Sauvegarde réussie en ${durationSec}s ! (${bottles.length} bouteilles & photos persistées)`)
     } catch (err) {
       console.error(err)
       showToast(`⚠️ Erreur sauvegarde serveur : ${err.message}. Export local proposé.`)
