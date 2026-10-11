@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  base: '/cave2/',
+  base: process.env.VITE_BASE || '/cave2/',
   plugins: [
     react(),
     VitePWA({

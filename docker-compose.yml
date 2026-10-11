@@ -1,0 +1,7 @@
+services:
+  cave:
+    build: .
+    container_name: cave-a-vin
+    restart: unless-stopped
+    ports:
+      - "80:80"
