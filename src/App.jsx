@@ -27,6 +27,14 @@ function App() {
   // Delete Bottle Confirmation State
   const [bottleToDelete, setBottleToDelete] = useState(null)
 
+  // Re-analysis Modal State for Existing Bottle
+  const [reanalysisModal, setReanalysisModal] = useState({
+    isOpen: false,
+    bottle: null,
+    isLoading: false,
+    extractedData: null
+  })
+
   // AI Configuration State
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
     return localStorage.getItem(API_KEY_STORAGE) || import.meta.env.VITE_GEMINI_API_KEY || ''
@@ -291,18 +299,24 @@ function App() {
 
     try {
       const compressedDataUrl = await compressImage(file)
-      setBottles(prev =>
-        prev.map(b => {
-          if (b.id === bottleId) {
-            return { ...b, photo: compressedDataUrl, image: compressedDataUrl }
-          }
-          return b
-        })
-      )
+      const updatedList = bottles.map(b => {
+        if (b.id === bottleId) {
+          return { ...b, photo: compressedDataUrl, image: compressedDataUrl }
+        }
+        return b
+      })
+      setBottles(updatedList)
+      
+      const targetBottle = updatedList.find(b => b.id === bottleId)
       if (selectedPhotoBottle && selectedPhotoBottle.id === bottleId) {
-        setSelectedPhotoBottle(prev => ({ ...prev, photo: compressedDataUrl, image: compressedDataUrl }))
+        setSelectedPhotoBottle(targetBottle)
       }
-      showToast('📸 Photo haute définition enregistrée ! Pensez à cliquer sur "Sauvegarder sur le serveur".')
+      showToast('📸 Photo haute définition enregistrée !')
+
+      // Propose or start re-analysis if API key is present
+      if (geminiApiKey && targetBottle) {
+        handleOpenReanalysis(targetBottle)
+      }
     } catch (err) {
       console.error(err)
       showToast('❌ Erreur lors du chargement de la photo.')
@@ -311,10 +325,15 @@ function App() {
     }
   }
 
-  // AI Analysis for an existing bottle from Lightbox
-  const handleAnalyzeExistingBottle = async (bottle) => {
+  // Open Re-analysis Modal on an Existing Bottle
+  const handleOpenReanalysis = async (bottle) => {
     const img = bottle.photo || bottle.image
-    if (!img) return
+    if (!img) {
+      // If no photo, trigger file picker first
+      triggerFileInput(bottle.id)
+      showToast("📷 Veuillez d'abord ajouter ou prendre une photo de l'étiquette.")
+      return
+    }
 
     if (!geminiApiKey) {
       setTempApiKey('')
@@ -323,30 +342,66 @@ function App() {
       return
     }
 
-    setIsAnalyzing(true)
-    try {
-      showToast("🤖 Analyse de l'étiquette en cours...")
-      const result = await analyzeWineLabel(img, geminiApiKey)
-
-      const updatedBottle = {
-        ...bottle,
-        'Domaine / Propriété': result.domaine || bottle['Domaine / Propriété'],
-        'Cuvée / Style': result.cuvee || bottle['Cuvée / Style'],
-        'Région': result.region || bottle['Région'],
-        'Appellation / IGP': result.appellation || bottle['Appellation / IGP'],
-        'Type de vin': result.type || bottle['Type de vin'],
-        'Millésime': result.millesime || bottle['Millésime']
+    // Open modal in loading state
+    setReanalysisModal({
+      isOpen: true,
+      bottle: bottle,
+      isLoading: true,
+      extractedData: {
+        'Domaine / Propriété': bottle['Domaine / Propriété'] || '',
+        'Cuvée / Style': bottle['Cuvée / Style'] || '',
+        'Région': bottle['Région'] || '',
+        'Appellation / IGP': bottle['Appellation / IGP'] || '',
+        'Type de vin': bottle['Type de vin'] || '',
+        'Millésime': bottle['Millésime'] || ''
       }
+    })
 
-      setBottles(prev => prev.map(b => b.id === bottle.id ? updatedBottle : b))
-      setSelectedPhotoBottle(updatedBottle)
-      showToast("✨ Bouteille mise à jour avec les informations de l'étiquette !")
+    try {
+      const result = await analyzeWineLabel(img, geminiApiKey)
+      setReanalysisModal(prev => ({
+        ...prev,
+        isLoading: false,
+        extractedData: {
+          'Domaine / Propriété': result.domaine || prev.bottle['Domaine / Propriété'] || '',
+          'Cuvée / Style': result.cuvee || prev.bottle['Cuvée / Style'] || '',
+          'Région': result.region || prev.bottle['Région'] || '',
+          'Appellation / IGP': result.appellation || prev.bottle['Appellation / IGP'] || '',
+          'Type de vin': result.type || prev.bottle['Type de vin'] || '',
+          'Millésime': result.millesime || prev.bottle['Millésime'] || ''
+        }
+      }))
+      showToast("✨ Analyse terminée ! Vérifiez les caractéristiques détectées.")
     } catch (err) {
       console.error(err)
-      showToast(`❌ Erreur IA : ${err.message}`)
-    } finally {
-      setIsAnalyzing(false)
+      setReanalysisModal(prev => ({ ...prev, isLoading: false }))
+      showToast(`❌ Erreur analyse IA : ${err.message}`)
     }
+  }
+
+  // Save confirmed re-analysis back into the existing bottle
+  const handleApplyReanalysis = async () => {
+    const { bottle, extractedData } = reanalysisModal
+    if (!bottle || !extractedData) return
+
+    const updatedBottle = {
+      ...bottle,
+      'Domaine / Propriété': extractedData['Domaine / Propriété'],
+      'Cuvée / Style': extractedData['Cuvée / Style'],
+      'Région': extractedData['Région'],
+      'Appellation / IGP': extractedData['Appellation / IGP'],
+      'Type de vin': extractedData['Type de vin'],
+      'Millésime': extractedData['Millésime']
+    }
+
+    const updatedBottles = bottles.map(b => b.id === bottle.id ? updatedBottle : b)
+    setBottles(updatedBottles)
+    if (selectedPhotoBottle && selectedPhotoBottle.id === bottle.id) {
+      setSelectedPhotoBottle(updatedBottle)
+    }
+
+    setReanalysisModal({ isOpen: false, bottle: null, isLoading: false, extractedData: null })
+    showToast("✨ Fiche bouteille mise à jour ! Pensez à cliquer sur 'Sauvegarder sur le serveur'.")
   }
 
   // Remove photo from bottle
@@ -560,7 +615,7 @@ function App() {
         <section className="recent-bottles glass-panel">
           <div className="section-header">
             <h2>Mon Inventaire</h2>
-            <span className="hint-pill">💡 Cliquez sur "Sauvegarder sur le serveur" pour garder vos données et photos à l'abri</span>
+            <span className="hint-pill">💡 Cliquez sur "✨ Ré-analyser avec l'IA" sur n'importe quelle bouteille pour actualiser sa fiche</span>
           </div>
           
           <div className="filters-container">
@@ -677,15 +732,26 @@ function App() {
                         </span>
                       </div>
 
-                      {/* Quick Photo Actions */}
+                      {/* Quick Actions (Photo + Re-analyze with AI) */}
                       <div className="bottle-quick-actions">
+                        {/* Direct Re-analyze button on the bottle card */}
+                        <button 
+                          type="button" 
+                          className="quick-photo-btn ai-quick-btn"
+                          onClick={() => handleOpenReanalysis(bottle)}
+                          title="Ré-interroger l'IA sur cette bouteille pour mettre à jour ses caractéristiques"
+                        >
+                          ✨ Ré-analyser avec l'IA
+                        </button>
+
                         <button 
                           type="button" 
                           className="quick-photo-btn"
                           onClick={(e) => triggerFileInput(bottle.id, e)}
                         >
-                          📷 {bottleImg ? 'Remplacer la photo' : 'Ajouter une photo'}
+                          📷 {bottleImg ? 'Changer photo' : 'Ajouter photo'}
                         </button>
+                        
                         {bottleImg && (
                           <>
                             <button 
@@ -693,7 +759,7 @@ function App() {
                               className="quick-photo-btn view-btn"
                               onClick={() => openLightbox(bottle)}
                             >
-                              🔍 Agrandir l'étiquette
+                              🔍 Zoom étiquette
                             </button>
                             <button 
                               type="button" 
@@ -757,6 +823,139 @@ function App() {
           </div>
         </section>
       </main>
+
+      {/* Re-analysis Review & Compare Modal */}
+      {reanalysisModal.isOpen && (
+        <div className="modal-overlay" onClick={() => setReanalysisModal({ isOpen: false, bottle: null, isLoading: false, extractedData: null })}>
+          <div className="modal-content glass-panel reanalysis-modal" onClick={(e) => e.stopPropagation()}>
+            <button 
+              className="close-btn" 
+              onClick={() => setReanalysisModal({ isOpen: false, bottle: null, isLoading: false, extractedData: null })}
+            >&times;</button>
+            
+            <h2>✨ Analyse IA de l'étiquette</h2>
+            <p className="settings-desc">
+              L'IA ré-examine l'étiquette de votre bouteille pour identifier et actualiser ses caractéristiques.
+            </p>
+
+            {reanalysisModal.isLoading ? (
+              <div className="reanalysis-loading-box">
+                <span className="pulse-dot large"></span>
+                <p><strong>Analyse de l'étiquette en cours par l'IA...</strong></p>
+                <small style={{ color: 'var(--text-secondary)' }}>Lecture du domaine, de la cuvée, du terroir et du millésime</small>
+              </div>
+            ) : (
+              reanalysisModal.extractedData && (
+                <div className="reanalysis-content-grid">
+                  {/* Photo preview */}
+                  <div className="reanalysis-photo-col">
+                    <img 
+                      src={reanalysisModal.bottle?.photo || reanalysisModal.bottle?.image} 
+                      alt="Étiquette" 
+                      className="reanalysis-photo-img"
+                    />
+                    <span className="reanalysis-badge">Photo analysée</span>
+                  </div>
+
+                  {/* Form to review and adjust extracted values */}
+                  <div className="reanalysis-fields-col">
+                    <div className="form-group">
+                      <label>Domaine / Propriété</label>
+                      <input 
+                        type="text" 
+                        value={reanalysisModal.extractedData['Domaine / Propriété']} 
+                        onChange={(e) => setReanalysisModal(prev => ({
+                          ...prev,
+                          extractedData: { ...prev.extractedData, 'Domaine / Propriété': e.target.value }
+                        }))}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Cuvée / Style</label>
+                      <input 
+                        type="text" 
+                        value={reanalysisModal.extractedData['Cuvée / Style']} 
+                        onChange={(e) => setReanalysisModal(prev => ({
+                          ...prev,
+                          extractedData: { ...prev.extractedData, 'Cuvée / Style': e.target.value }
+                        }))}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                      <div className="form-group" style={{ flex: '1 1 140px' }}>
+                        <label>Région</label>
+                        <input 
+                          type="text" 
+                          value={reanalysisModal.extractedData['Région']} 
+                          onChange={(e) => setReanalysisModal(prev => ({
+                            ...prev,
+                            extractedData: { ...prev.extractedData, 'Région': e.target.value }
+                          }))}
+                        />
+                      </div>
+                      <div className="form-group" style={{ flex: '1 1 140px' }}>
+                        <label>Appellation / IGP</label>
+                        <input 
+                          type="text" 
+                          value={reanalysisModal.extractedData['Appellation / IGP']} 
+                          onChange={(e) => setReanalysisModal(prev => ({
+                            ...prev,
+                            extractedData: { ...prev.extractedData, 'Appellation / IGP': e.target.value }
+                          }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                      <div className="form-group" style={{ flex: '1 1 140px' }}>
+                        <label>Type de vin</label>
+                        <input 
+                          type="text" 
+                          value={reanalysisModal.extractedData['Type de vin']} 
+                          onChange={(e) => setReanalysisModal(prev => ({
+                            ...prev,
+                            extractedData: { ...prev.extractedData, 'Type de vin': e.target.value }
+                          }))}
+                        />
+                      </div>
+                      <div className="form-group" style={{ width: '110px' }}>
+                        <label>Millésime</label>
+                        <input 
+                          type="text" 
+                          value={reanalysisModal.extractedData['Millésime']} 
+                          onChange={(e) => setReanalysisModal(prev => ({
+                            ...prev,
+                            extractedData: { ...prev.extractedData, 'Millésime': e.target.value }
+                          }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="reanalysis-actions">
+                      <button 
+                        type="button" 
+                        className="btn-cancel" 
+                        onClick={() => setReanalysisModal({ isOpen: false, bottle: null, isLoading: false, extractedData: null })}
+                      >
+                        Annuler
+                      </button>
+                      <button 
+                        type="button" 
+                        className="add-btn apply-reanalysis-btn"
+                        onClick={handleApplyReanalysis}
+                      >
+                        ✅ Mettre à jour cette bouteille
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Delete Bottle Confirmation Modal */}
       {bottleToDelete && (
@@ -884,10 +1083,9 @@ function App() {
                   <button 
                     type="button" 
                     className="ai-analyze-btn"
-                    onClick={() => handleAnalyzeExistingBottle(selectedPhotoBottle)}
-                    disabled={isAnalyzing}
+                    onClick={() => handleOpenReanalysis(selectedPhotoBottle)}
                   >
-                    {isAnalyzing ? '⏳ Analyse IA en cours...' : '✨ Réanalyser cette étiquette avec l\'IA'}
+                    ✨ Ré-analyser cette étiquette avec l'IA
                   </button>
 
                   <button 
