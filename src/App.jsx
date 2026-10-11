@@ -3,7 +3,7 @@ import localforage from 'localforage'
 import dbData from './db.json'
 import { compressImage } from './utils/imageUtils'
 import { analyzeWineLabel } from './utils/aiAnalysis'
-import { sendBackupToServer, fetchServerBackup, fetchServerStatus, exportBackupToFile } from './utils/backupService'
+import { sendBackupToServer, fetchServerBackup, exportBackupToFile } from './utils/backupService'
 import './App.css'
 
 const STORAGE_KEY = 'cave_bottles_v1'
@@ -23,6 +23,9 @@ function App() {
   const [lastServerBackup, setLastServerBackup] = useState(() => {
     return localStorage.getItem(LAST_BACKUP_STORAGE) || null
   })
+
+  // Delete Bottle Confirmation State
+  const [bottleToDelete, setBottleToDelete] = useState(null)
 
   // AI Configuration State
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
@@ -194,6 +197,16 @@ function App() {
       console.error(err)
       showToast(`❌ Impossible de restaurer : ${err.message}`)
     }
+  }
+
+  // Delete Bottle permanently
+  const confirmDeleteBottle = (id) => {
+    setBottles(prev => prev.filter(b => b.id !== id))
+    setBottleToDelete(null)
+    if (selectedPhotoBottle && selectedPhotoBottle.id === id) {
+      setSelectedPhotoBottle(null)
+    }
+    showToast('🗑️ Bouteille supprimée de la cave. Pensez à "Sauvegarder sur le serveur".')
   }
 
   // Save API key
@@ -688,14 +701,14 @@ function App() {
                               onClick={(e) => handleRemovePhoto(bottle.id, e)}
                               title="Supprimer la photo actuelle"
                             >
-                              🗑️ Supprimer
+                              🗑️ Enlever photo
                             </button>
                           </>
                         )}
                       </div>
                     </div>
 
-                    {/* Right column: Millésime and Quantité controls */}
+                    {/* Right column: Millésime, Quantité controls and Delete button */}
                     <div className="bottle-right-col">
                       <div className="bottle-year-box">
                         <span className="year-label">Millésime</span>
@@ -719,6 +732,19 @@ function App() {
                           >+</button>
                         </div>
                       </div>
+
+                      {/* Delete bottle action button */}
+                      <button 
+                        type="button"
+                        className="delete-bottle-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setBottleToDelete(bottle)
+                        }}
+                        title="Supprimer cette bouteille de la cave"
+                      >
+                        🗑️ Supprimer
+                      </button>
                     </div>
                   </div>
                 )
@@ -731,6 +757,46 @@ function App() {
           </div>
         </section>
       </main>
+
+      {/* Delete Bottle Confirmation Modal */}
+      {bottleToDelete && (
+        <div className="modal-overlay" onClick={() => setBottleToDelete(null)}>
+          <div className="modal-content delete-confirm-modal glass-panel" onClick={(e) => e.stopPropagation()}>
+            <button className="close-btn" onClick={() => setBottleToDelete(null)}>&times;</button>
+            <h2 className="delete-title">⚠️ Supprimer cette référence ?</h2>
+            <p className="delete-confirm-text">
+              Êtes-vous sûr de vouloir supprimer définitivement cette référence de votre cave ?
+            </p>
+
+            <div className="delete-bottle-preview-box">
+              <span className="delete-bottle-name">{bottleToDelete['Domaine / Propriété']}</span>
+              {bottleToDelete['Cuvée / Style'] && (
+                <span className="delete-bottle-cuvee"> • {bottleToDelete['Cuvée / Style']}</span>
+              )}
+              <div className="delete-meta-info">
+                <span>{bottleToDelete['Appellation / IGP'] || 'Sans appellation'}</span>
+                <span>Millésime : {bottleToDelete['Millésime'] || '—'}</span>
+                <span>Stock restant : {bottleToDelete['Quantité']} bouteille(s)</span>
+              </div>
+            </div>
+
+            <p className="delete-warning-subtext">
+              Cette action retirera complètement cette référence et sa photo de votre inventaire.
+            </p>
+
+            <div className="form-actions delete-actions">
+              <button type="button" className="btn-cancel" onClick={() => setBottleToDelete(null)}>Annuler</button>
+              <button 
+                type="button" 
+                className="btn-danger-confirm"
+                onClick={() => confirmDeleteBottle(bottleToDelete.id)}
+              >
+                🗑️ Confirmer la suppression
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Lightbox / High-Resolution Zoom Modal */}
       {selectedPhotoBottle && (
@@ -832,15 +898,13 @@ function App() {
                     📷 Remplacer cette photo
                   </button>
 
-                  {(selectedPhotoBottle.photo || selectedPhotoBottle.image) && (
-                    <button 
-                      type="button" 
-                      className="btn-danger-outline"
-                      onClick={() => handleRemovePhoto(selectedPhotoBottle.id)}
-                    >
-                      🗑️ Supprimer la photo
-                    </button>
-                  )}
+                  <button 
+                    type="button" 
+                    className="btn-danger-outline delete-whole-bottle-btn"
+                    onClick={() => setBottleToDelete(selectedPhotoBottle)}
+                  >
+                    🗑️ Supprimer cette référence de la cave
+                  </button>
                 </div>
               </div>
             </div>
