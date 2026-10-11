@@ -1,13 +1,15 @@
 /**
- * Analyzes a wine bottle label image using Nous Portal (portal.nousresearch.com)
- * or Google Gemini Vision, extracting wine characteristics in structured JSON format.
+ * Analyzes a wine bottle label image using OpenRouter (openrouter.ai)
+ * or Google Gemini Direct, extracting wine characteristics in structured JSON format.
  */
 
-export const DEFAULT_NOUS_MODELS = [
-  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (Recommandé - Très rapide & précis)' },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (OpenAI - Rapide & économique)' },
-  { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash (Mix MoE & Vision)' },
-  { id: 'anthropic/claude-haiku-5.5', name: 'Claude Haiku 5.5 (Anthropic - Haute précision)' }
+export const DEFAULT_OPENROUTER_MODELS = [
+  { id: 'google/gemini-2.5-flash', name: 'Google: Gemini 2.5 Flash (Recommandé - Ultra rapide & précis)' },
+  { id: 'openai/gpt-4o-mini', name: 'OpenAI: GPT-4o Mini (Très rapide & économique)' },
+  { id: 'openai/gpt-4o', name: 'OpenAI: GPT-4o (Vision haute résolution)' },
+  { id: 'anthropic/claude-3.5-sonnet', name: 'Anthropic: Claude 3.5 Sonnet (Précision maximale)' },
+  { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek: DeepSeek V4.1 Flash (Mix MoE vision)' },
+  { id: 'meta-llama/llama-3.2-11b-vision-instruct', name: 'Meta: Llama 3.2 11B Vision (Open source)' }
 ];
 
 const GEMINI_MODELS = [
@@ -36,7 +38,7 @@ Si une information n'est pas certaine ou invisible, mets une estimation cohéren
 
 function extractJsonFromText(text) {
   if (!text) throw new Error("Réponse vide de l'IA.");
-  
+
   // Try finding markdown code block
   const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   const targetStr = codeBlockMatch ? codeBlockMatch[1] : text;
@@ -53,12 +55,38 @@ function extractJsonFromText(text) {
 }
 
 /**
- * Analyze label using Nous Portal OpenAI-compatible Vision API
- * Endpoint: https://inference-api.nousresearch.com/v1/chat/completions
+ * Fetch dynamic list of vision-compatible models from OpenRouter API
  */
-async function analyzeWithNousPortal(base64DataUrl, apiKey, requestedModel = 'google/gemini-2.5-flash') {
+export async function fetchOpenRouterVisionModels() {
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/models');
+    if (!res.ok) return DEFAULT_OPENROUTER_MODELS;
+    const data = await res.json();
+    if (!data || !Array.isArray(data.data)) return DEFAULT_OPENROUTER_MODELS;
+
+    const visionModels = data.data.filter(m => 
+      m.architecture && 
+      Array.isArray(m.architecture.input_modalities) && 
+      m.architecture.input_modalities.includes('image')
+    ).map(m => ({
+      id: m.id,
+      name: `${m.name || m.id}${m.id.includes(':free') ? ' (Gratuit)' : ''}`
+    }));
+
+    return visionModels.length > 0 ? visionModels : DEFAULT_OPENROUTER_MODELS;
+  } catch (e) {
+    console.warn('Impossible de charger la liste dynamique OpenRouter:', e);
+    return DEFAULT_OPENROUTER_MODELS;
+  }
+}
+
+/**
+ * Analyze label using OpenRouter API
+ * Endpoint: https://openrouter.ai/api/v1/chat/completions
+ */
+async function analyzeWithOpenRouter(base64DataUrl, apiKey, requestedModel = 'google/gemini-2.5-flash') {
   if (!apiKey || !apiKey.trim()) {
-    throw new Error("Clé API Nous Portal manquante. Récupérez votre clé sur https://portal.nousresearch.com/ et renseignez-la dans les réglages.");
+    throw new Error("Clé API OpenRouter manquante. Récupérez votre clé sur https://openrouter.ai/keys et renseignez-la dans les réglages.");
   }
 
   const candidateModels = [
@@ -92,18 +120,20 @@ async function analyzeWithNousPortal(base64DataUrl, apiKey, requestedModel = 'go
         response_format: { type: "json_object" }
       };
 
-      const res = await fetch('https://inference-api.nousresearch.com/v1/chat/completions', {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey.trim()}`
+          'Authorization': `Bearer ${apiKey.trim()}`,
+          'HTTP-Referer': window?.location?.origin || 'http://localhost',
+          'X-Title': 'Cave a Vin'
         },
         body: JSON.stringify(payload)
       });
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        const message = errorData?.message || errorData?.error?.message || `Erreur HTTP ${res.status}`;
+        const message = errorData?.error?.message || errorData?.message || `Erreur HTTP ${res.status}`;
         throw new Error(`[${model}]: ${message}`);
       }
 
@@ -115,12 +145,12 @@ async function analyzeWithNousPortal(base64DataUrl, apiKey, requestedModel = 'go
 
       return extractJsonFromText(content);
     } catch (err) {
-      console.warn(`Tentative Nous Portal (${model}) échouée:`, err);
+      console.warn(`Tentative OpenRouter (${model}) échouée:`, err);
       lastError = err;
     }
   }
 
-  throw lastError || new Error("Impossible d'analyser l'étiquette via Nous Portal.");
+  throw lastError || new Error("Impossible d'analyser l'étiquette via OpenRouter.");
 }
 
 /**
@@ -197,7 +227,7 @@ async function analyzeWithGeminiDirect(base64DataUrl, apiKey) {
 }
 
 /**
- * Main analysis function supporting Nous Portal and Gemini Direct
+ * Main analysis function supporting OpenRouter and Gemini Direct
  * @param {string} base64DataUrl - Compressed image data URL
  * @param {object|string} config - Configuration object or direct apiKey string
  */
@@ -208,23 +238,22 @@ export async function analyzeWineLabel(base64DataUrl, config) {
 
   // Handle legacy call where config is directly an apiKey string
   if (typeof config === 'string') {
-    // Check if it looks like a Gemini key (starts with AIzaSy)
     if (config.startsWith('AIzaSy')) {
       return analyzeWithGeminiDirect(base64DataUrl, config);
     } else {
-      return analyzeWithNousPortal(base64DataUrl, config);
+      return analyzeWithOpenRouter(base64DataUrl, config);
     }
   }
 
   const {
-    provider = 'nous',
-    nousApiKey = '',
-    nousModel = 'google/gemini-2.5-flash',
+    provider = 'openrouter',
+    openrouterApiKey = '',
+    openrouterModel = 'google/gemini-2.5-flash',
     geminiApiKey = ''
   } = config || {};
 
-  if (provider === 'nous') {
-    return analyzeWithNousPortal(base64DataUrl, nousApiKey, nousModel);
+  if (provider === 'openrouter') {
+    return analyzeWithOpenRouter(base64DataUrl, openrouterApiKey, openrouterModel);
   } else {
     return analyzeWithGeminiDirect(base64DataUrl, geminiApiKey);
   }

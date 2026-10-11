@@ -2,14 +2,14 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import localforage from 'localforage'
 import dbData from './db.json'
 import { compressImage } from './utils/imageUtils'
-import { analyzeWineLabel, DEFAULT_NOUS_MODELS } from './utils/aiAnalysis'
+import { analyzeWineLabel, DEFAULT_OPENROUTER_MODELS, fetchOpenRouterVisionModels } from './utils/aiAnalysis'
 import { sendBackupToServer, fetchServerBackup, exportBackupToFile } from './utils/backupService'
 import './App.css'
 
 const STORAGE_KEY = 'cave_bottles_v1'
 const AI_PROVIDER_STORAGE = 'cave_ai_provider'
-const NOUS_API_KEY_STORAGE = 'cave_nous_api_key'
-const NOUS_MODEL_STORAGE = 'cave_nous_model'
+const OPENROUTER_API_KEY_STORAGE = 'cave_openrouter_api_key'
+const OPENROUTER_MODEL_STORAGE = 'cave_openrouter_model'
 const GEMINI_API_KEY_STORAGE = 'cave_gemini_api_key'
 const LAST_BACKUP_STORAGE = 'cave_last_server_backup'
 
@@ -38,24 +38,28 @@ function App() {
     extractedData: null
   })
 
-  // AI Configuration State (Nous Portal by default, or Gemini)
+  // AI Configuration State (OpenRouter by default, or Gemini)
   const [aiProvider, setAiProvider] = useState(() => {
-    return localStorage.getItem(AI_PROVIDER_STORAGE) || 'nous'
+    return localStorage.getItem(AI_PROVIDER_STORAGE) || 'openrouter'
   })
-  const [nousApiKey, setNousApiKey] = useState(() => {
-    return localStorage.getItem(NOUS_API_KEY_STORAGE) || import.meta.env.VITE_NOUS_API_KEY || ''
+  const [openrouterApiKey, setOpenrouterApiKey] = useState(() => {
+    return localStorage.getItem(OPENROUTER_API_KEY_STORAGE) || import.meta.env.VITE_OPENROUTER_API_KEY || ''
   })
-  const [nousModel, setNousModel] = useState(() => {
-    return localStorage.getItem(NOUS_MODEL_STORAGE) || 'google/gemini-2.5-flash'
+  const [openrouterModel, setOpenrouterModel] = useState(() => {
+    return localStorage.getItem(OPENROUTER_MODEL_STORAGE) || 'google/gemini-2.5-flash'
   })
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
     return localStorage.getItem(GEMINI_API_KEY_STORAGE) || import.meta.env.VITE_GEMINI_API_KEY || ''
   })
 
+  // OpenRouter dynamic models list
+  const [availableModels, setAvailableModels] = useState(DEFAULT_OPENROUTER_MODELS)
+  const [isLoadingModels, setIsLoadingModels] = useState(false)
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [tempProvider, setTempProvider] = useState(aiProvider)
-  const [tempNousApiKey, setTempNousApiKey] = useState(nousApiKey)
-  const [tempNousModel, setTempNousModel] = useState(nousModel)
+  const [tempOpenrouterApiKey, setTempOpenrouterApiKey] = useState(openrouterApiKey)
+  const [tempOpenrouterModel, setTempOpenrouterModel] = useState(openrouterModel)
   const [tempGeminiApiKey, setTempGeminiApiKey] = useState(geminiApiKey)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [autoAnalyzeOnUpload, setAutoAnalyzeOnUpload] = useState(true)
@@ -235,47 +239,62 @@ function App() {
 
   // Check if active AI provider is configured
   const isAiConfigured = () => {
-    if (aiProvider === 'nous') {
-      return Boolean(nousApiKey && nousApiKey.trim())
+    if (aiProvider === 'openrouter') {
+      return Boolean(openrouterApiKey && openrouterApiKey.trim())
     }
     return Boolean(geminiApiKey && geminiApiKey.trim())
   }
 
   const getAiConfig = () => ({
     provider: aiProvider,
-    nousApiKey,
-    nousModel,
+    openrouterApiKey,
+    openrouterModel,
     geminiApiKey
   })
 
-  const openAiSettings = () => {
+  const openAiSettings = async () => {
     setTempProvider(aiProvider)
-    setTempNousApiKey(nousApiKey)
-    setTempNousModel(nousModel)
+    setTempOpenrouterApiKey(openrouterApiKey)
+    setTempOpenrouterModel(openrouterModel)
     setTempGeminiApiKey(geminiApiKey)
     setIsSettingsOpen(true)
+
+    // Dynamically fetch vision models from OpenRouter
+    if (availableModels.length <= DEFAULT_OPENROUTER_MODELS.length) {
+      setIsLoadingModels(true)
+      try {
+        const dynamicModels = await fetchOpenRouterVisionModels()
+        if (dynamicModels && dynamicModels.length > 0) {
+          setAvailableModels(dynamicModels)
+        }
+      } catch (err) {
+        console.warn('Erreur chargement modèles OpenRouter:', err)
+      } finally {
+        setIsLoadingModels(false)
+      }
+    }
   }
 
   // Save AI settings
   const handleSaveAiSettings = (e) => {
     e.preventDefault()
-    const cleanedNousKey = tempNousApiKey.trim()
+    const cleanedOpenrouterKey = tempOpenrouterApiKey.trim()
     const cleanedGeminiKey = tempGeminiApiKey.trim()
-    const selectedModel = tempNousModel.trim() || 'google/gemini-2.5-flash'
+    const selectedModel = tempOpenrouterModel.trim() || 'google/gemini-2.5-flash'
 
     setAiProvider(tempProvider)
-    setNousApiKey(cleanedNousKey)
-    setNousModel(selectedModel)
+    setOpenrouterApiKey(cleanedOpenrouterKey)
+    setOpenrouterModel(selectedModel)
     setGeminiApiKey(cleanedGeminiKey)
 
     localStorage.setItem(AI_PROVIDER_STORAGE, tempProvider)
-    localStorage.setItem(NOUS_API_KEY_STORAGE, cleanedNousKey)
-    localStorage.setItem(NOUS_MODEL_STORAGE, selectedModel)
+    localStorage.setItem(OPENROUTER_API_KEY_STORAGE, cleanedOpenrouterKey)
+    localStorage.setItem(OPENROUTER_MODEL_STORAGE, selectedModel)
     localStorage.setItem(GEMINI_API_KEY_STORAGE, cleanedGeminiKey)
 
     setIsSettingsOpen(false)
-    showToast(tempProvider === 'nous' 
-      ? "🟣 Paramètres Nous Portal (portal.nousresearch.com) enregistrés !" 
+    showToast(tempProvider === 'openrouter' 
+      ? `🌐 Paramètres OpenRouter (${selectedModel}) enregistrés !` 
       : "🔵 Paramètres Google Gemini enregistrés !")
   }
 
@@ -312,8 +331,8 @@ function App() {
   const triggerAiAnalysis = async (imageDataUrl) => {
     if (!isAiConfigured()) {
       openAiSettings()
-      showToast(aiProvider === 'nous' 
-        ? "⚠️ Veuillez renseigner votre clé API Nous Portal (portal.nousresearch.com)." 
+      showToast(aiProvider === 'openrouter' 
+        ? "⚠️ Veuillez renseigner votre clé API OpenRouter (openrouter.ai/keys)." 
         : "⚠️ Veuillez renseigner votre clé API Google Gemini.")
       return
     }
@@ -322,8 +341,8 @@ function App() {
     setAiSuccessBadge(false)
 
     try {
-      showToast(aiProvider === 'nous' 
-        ? "🟣 Analyse en cours via Nous Research..." 
+      showToast(aiProvider === 'openrouter' 
+        ? "🌐 Analyse en cours via OpenRouter..." 
         : "🤖 Analyse en cours via Google Gemini...")
       const result = await analyzeWineLabel(imageDataUrl, getAiConfig())
 
@@ -392,8 +411,8 @@ function App() {
 
     if (!isAiConfigured()) {
       openAiSettings()
-      showToast(aiProvider === 'nous' 
-        ? "⚠️ Veuillez configurer votre clé API Nous Portal (portal.nousresearch.com)." 
+      showToast(aiProvider === 'openrouter' 
+        ? "⚠️ Veuillez configurer votre clé API OpenRouter (openrouter.ai/keys)." 
         : "⚠️ Veuillez configurer votre clé API Google Gemini.")
       return
     }
@@ -638,9 +657,9 @@ function App() {
           <button 
             className="settings-btn" 
             onClick={openAiSettings}
-            title={aiProvider === 'nous' ? "Configuration IA (Nous Portal - portal.nousresearch.com)" : "Configuration IA (Google Gemini)"}
+            title={aiProvider === 'openrouter' ? "Configuration IA (OpenRouter - openrouter.ai)" : "Configuration IA (Google Gemini)"}
           >
-            {aiProvider === 'nous' ? '🟣' : '🤖'} {isAiConfigured() ? (aiProvider === 'nous' ? 'Nous IA Active ✨' : 'Gemini Actif ✨') : 'Configurer IA'}
+            {aiProvider === 'openrouter' ? '🌐' : '🤖'} {isAiConfigured() ? (aiProvider === 'openrouter' ? 'OpenRouter Actif ✨' : 'Gemini Actif ✨') : 'Configurer IA'}
           </button>
 
           <button className="add-btn" onClick={() => setIsFormOpen(true)}>
@@ -1225,7 +1244,7 @@ function App() {
         </div>
       )}
 
-      {/* Settings Modal (Nous Portal & Gemini) */}
+      {/* Settings Modal (OpenRouter & Gemini) */}
       {isSettingsOpen && (
         <div className="modal-overlay" onClick={() => setIsSettingsOpen(false)}>
           <div className="modal-content glass-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '650px' }}>
@@ -1239,10 +1258,10 @@ function App() {
             <div className="provider-tabs">
               <button 
                 type="button" 
-                className={`provider-tab-btn ${tempProvider === 'nous' ? 'active' : ''}`}
-                onClick={() => setTempProvider('nous')}
+                className={`provider-tab-btn ${tempProvider === 'openrouter' ? 'active' : ''}`}
+                onClick={() => setTempProvider('openrouter')}
               >
-                🟣 Nous Research <span className="nous-badge-highlight">Recommandé</span>
+                🌐 OpenRouter <span className="openrouter-badge-highlight">Recommandé</span>
               </button>
               <button 
                 type="button" 
@@ -1254,61 +1273,66 @@ function App() {
             </div>
 
             <form onSubmit={handleSaveAiSettings}>
-              {tempProvider === 'nous' ? (
+              {tempProvider === 'openrouter' ? (
                 <>
                   <div className="form-group">
-                    <label>Clé API Nous Portal (portal.nousresearch.com)</label>
+                    <label>Clé API OpenRouter (openrouter.ai)</label>
                     <input 
                       type="password" 
-                      placeholder="Collez votre clé API Nous Portal..."
-                      value={tempNousApiKey}
-                      onChange={(e) => setTempNousApiKey(e.target.value)}
+                      placeholder="Collez votre clé API OpenRouter (sk-or-v1-...)"
+                      value={tempOpenrouterApiKey}
+                      onChange={(e) => setTempOpenrouterApiKey(e.target.value)}
                       autoFocus
                     />
                   </div>
 
                   <div className="form-group">
-                    <label>Modèle Vision (Inférence Nous)</label>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label>Sélection du modèle Vision</label>
+                      {isLoadingModels && (
+                        <small style={{ color: '#c4b5fd' }}>Chargement des modèles...</small>
+                      )}
+                    </div>
                     <select 
-                      value={DEFAULT_NOUS_MODELS.some(m => m.id === tempNousModel) ? tempNousModel : 'custom'}
+                      value={availableModels.some(m => m.id === tempOpenrouterModel) ? tempOpenrouterModel : 'custom'}
                       onChange={(e) => {
                         if (e.target.value !== 'custom') {
-                          setTempNousModel(e.target.value)
+                          setTempOpenrouterModel(e.target.value)
                         }
                       }}
                     >
-                      {DEFAULT_NOUS_MODELS.map(m => (
+                      {availableModels.map(m => (
                         <option key={m.id} value={m.id}>{m.name}</option>
                       ))}
-                      <option value="custom">Autre modèle personnalisé...</option>
+                      <option value="custom">Autre modèle OpenRouter personnalisé...</option>
                     </select>
                   </div>
 
-                  {(!DEFAULT_NOUS_MODELS.some(m => m.id === tempNousModel) || tempNousModel === '') && (
+                  {(!availableModels.some(m => m.id === tempOpenrouterModel) || tempOpenrouterModel === '') && (
                     <div className="form-group" style={{ marginTop: '0.5rem' }}>
-                      <label>Identifiant du modèle personnalisé</label>
+                      <label>Identifiant du modèle OpenRouter</label>
                       <input 
                         type="text" 
-                        placeholder="Ex: openai/gpt-4o, anthropic/claude-sonnet-5.5..."
-                        value={tempNousModel}
-                        onChange={(e) => setTempNousModel(e.target.value)}
+                        placeholder="Ex: openai/gpt-4o, anthropic/claude-3.5-sonnet, google/gemini-2.5-flash..."
+                        value={tempOpenrouterModel}
+                        onChange={(e) => setTempOpenrouterModel(e.target.value)}
                       />
                     </div>
                   )}
 
                   <div className="api-key-help-box">
-                    <p>💡 <strong>Connexion à votre compte Nous Portal :</strong></p>
-                    <p>Récupérez votre clé d'API directement sur votre tableau de bord Nous Research :</p>
+                    <p>💡 <strong>Connexion à votre compte OpenRouter :</strong></p>
+                    <p>Créez ou copiez votre clé d'API directement sur OpenRouter :</p>
                     <a 
-                      href="https://portal.nousresearch.com/" 
+                      href="https://openrouter.ai/keys" 
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="api-key-link"
                     >
-                      👉 Accéder à mon compte sur portal.nousresearch.com ↗
+                      👉 Obtenir ma clé API sur openrouter.ai/keys ↗
                     </a>
                     <small style={{ color: 'var(--text-secondary)', marginTop: '0.4rem', display: 'block' }}>
-                      L'application se connecte directement à l'API OpenAI-compatible de Nous (inference-api.nousresearch.com/v1) pour analyser vos photos.
+                      OpenRouter donne accès à des centaines de modèles d'IA (Gemini 2.5 Flash, GPT-4o, Claude 3.5 Sonnet, Llama 3.2 Vision, etc.) avec une seule et même clé d'API.
                     </small>
                   </div>
                 </>
