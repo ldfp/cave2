@@ -2,9 +2,11 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import localforage from 'localforage'
 import dbData from './db.json'
 import { compressImage } from './utils/imageUtils'
+import { analyzeWineLabel } from './utils/aiAnalysis'
 import './App.css'
 
 const STORAGE_KEY = 'cave_bottles_v1'
+const API_KEY_STORAGE = 'cave_gemini_api_key'
 
 function App() {
   const [bottles, setBottles] = useState([])
@@ -12,6 +14,15 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [regionFilter, setRegionFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+
+  // AI Configuration State
+  const [geminiApiKey, setGeminiApiKey] = useState(() => {
+    return localStorage.getItem(API_KEY_STORAGE) || import.meta.env.VITE_GEMINI_API_KEY || ''
+  })
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [tempApiKey, setTempApiKey] = useState(geminiApiKey)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [autoAnalyzeOnUpload, setAutoAnalyzeOnUpload] = useState(true)
 
   // Form State
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -26,6 +37,7 @@ function App() {
     photo: null
   })
   const [formPhotoPreview, setFormPhotoPreview] = useState(null)
+  const [aiSuccessBadge, setAiSuccessBadge] = useState(false)
 
   // Lightbox / Zoom State
   const [selectedPhotoBottle, setSelectedPhotoBottle] = useState(null)
@@ -107,7 +119,16 @@ function App() {
     setToastMessage(msg)
     setTimeout(() => {
       setToastMessage(null)
-    }, 3000)
+    }, 3500)
+  }
+
+  const handleSaveApiKey = (e) => {
+    e.preventDefault()
+    const cleaned = tempApiKey.trim()
+    setGeminiApiKey(cleaned)
+    localStorage.setItem(API_KEY_STORAGE, cleaned)
+    setIsSettingsOpen(false)
+    showToast("🔑 Clé API Gemini enregistrée !")
   }
 
   // Options for filters
@@ -139,6 +160,42 @@ function App() {
   const totalFilteredBottles = filteredBottles.reduce((sum, b) => sum + (Number(b['Quantité']) || 0), 0)
   const totalGlobalBottles = bottles.reduce((sum, b) => sum + (Number(b['Quantité']) || 0), 0)
 
+  // AI Analysis Execution for Form
+  const triggerAiAnalysis = async (imageDataUrl) => {
+    if (!geminiApiKey) {
+      setTempApiKey('')
+      setIsSettingsOpen(true)
+      showToast("⚠️ Veuillez renseigner votre clé API Gemini pour l'analyse IA.")
+      return
+    }
+
+    setIsAnalyzing(true)
+    setAiSuccessBadge(false)
+
+    try {
+      showToast("🤖 Analyse de l'étiquette en cours par l'IA...")
+      const result = await analyzeWineLabel(imageDataUrl, geminiApiKey)
+
+      setNewBottle(prev => ({
+        ...prev,
+        'Domaine / Propriété': result.domaine || prev['Domaine / Propriété'],
+        'Cuvée / Style': result.cuvee || prev['Cuvée / Style'],
+        'Région': result.region || prev['Région'],
+        'Appellation / IGP': result.appellation || prev['Appellation / IGP'],
+        'Type de vin': result.type || prev['Type de vin'],
+        'Millésime': result.millesime || prev['Millésime']
+      }))
+
+      setAiSuccessBadge(true)
+      showToast("✨ Étiquette analysée ! Les champs ont été pré-remplis.")
+    } catch (err) {
+      console.error(err)
+      showToast(`❌ Erreur IA : ${err.message || "Analyse impossible"}`)
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
   // Handle Photo Upload on an existing bottle
   const handlePhotoFileChange = async (bottleId, e) => {
     const file = e.target.files?.[0]
@@ -163,6 +220,44 @@ function App() {
       showToast('❌ Erreur lors du chargement de la photo.')
     } finally {
       e.target.value = ''
+    }
+  }
+
+  // AI Analysis for an existing bottle from Lightbox
+  const handleAnalyzeExistingBottle = async (bottle) => {
+    const img = bottle.photo || bottle.image
+    if (!img) return
+
+    if (!geminiApiKey) {
+      setTempApiKey('')
+      setIsSettingsOpen(true)
+      showToast("⚠️ Veuillez configurer votre clé API Gemini.")
+      return
+    }
+
+    setIsAnalyzing(true)
+    try {
+      showToast("🤖 Analyse de l'étiquette en cours...")
+      const result = await analyzeWineLabel(img, geminiApiKey)
+
+      const updatedBottle = {
+        ...bottle,
+        'Domaine / Propriété': result.domaine || bottle['Domaine / Propriété'],
+        'Cuvée / Style': result.cuvee || bottle['Cuvée / Style'],
+        'Région': result.region || bottle['Région'],
+        'Appellation / IGP': result.appellation || bottle['Appellation / IGP'],
+        'Type de vin': result.type || bottle['Type de vin'],
+        'Millésime': result.millesime || bottle['Millésime']
+      }
+
+      setBottles(prev => prev.map(b => b.id === bottle.id ? updatedBottle : b))
+      setSelectedPhotoBottle(updatedBottle)
+      showToast("✨ Bouteille mise à jour avec les informations de l'étiquette !")
+    } catch (err) {
+      console.error(err)
+      showToast(`❌ Erreur IA : ${err.message}`)
+    } finally {
+      setIsAnalyzing(false)
     }
   }
 
@@ -201,6 +296,11 @@ function App() {
       const compressedDataUrl = await compressImage(file)
       setFormPhotoPreview(compressedDataUrl)
       setNewBottle(prev => ({ ...prev, photo: compressedDataUrl, image: compressedDataUrl }))
+
+      // Trigger automatic AI analysis if enabled
+      if (autoAnalyzeOnUpload) {
+        triggerAiAnalysis(compressedDataUrl)
+      }
     } catch (err) {
       console.error(err)
       showToast("❌ Impossible de charger l'image.")
@@ -209,6 +309,7 @@ function App() {
 
   const handleClearFormPhoto = () => {
     setFormPhotoPreview(null)
+    setAiSuccessBadge(false)
     setNewBottle(prev => ({ ...prev, photo: null, image: null }))
     if (formFileInputRef.current) {
       formFileInputRef.current.value = ''
@@ -234,6 +335,7 @@ function App() {
       photo: null
     })
     setFormPhotoPreview(null)
+    setAiSuccessBadge(false)
     showToast('✨ Bouteille ajoutée au catalogue !')
   }
 
@@ -291,9 +393,21 @@ function App() {
           <h1 className="gradient-text">Gestion de ma cave</h1>
           <p className="subtitle">Visualisez, personnalisez et gérez votre collection de vins</p>
         </div>
-        <button className="add-btn" onClick={() => setIsFormOpen(true)}>
-          <span className="btn-icon">+</span> Ajouter une bouteille
-        </button>
+        <div className="header-actions">
+          <button 
+            className="settings-btn" 
+            onClick={() => {
+              setTempApiKey(geminiApiKey)
+              setIsSettingsOpen(true)
+            }}
+            title="Configuration IA (Clé API Gemini)"
+          >
+            ⚙️ {geminiApiKey ? 'IA Active ✨' : 'Configurer IA'}
+          </button>
+          <button className="add-btn" onClick={() => setIsFormOpen(true)}>
+            <span className="btn-icon">+</span> Ajouter une bouteille
+          </button>
+        </div>
       </header>
 
       <main>
@@ -315,7 +429,7 @@ function App() {
         <section className="recent-bottles glass-panel">
           <div className="section-header">
             <h2>Mon Inventaire</h2>
-            <span className="hint-pill">💡 Cliquez sur la photo d'une bouteille pour l'agrandir et zoomer sur l'étiquette</span>
+            <span className="hint-pill">💡 Importez une photo pour remplir automatiquement les caractéristiques avec l'IA</span>
           </div>
           
           <div className="filters-container">
@@ -585,6 +699,15 @@ function App() {
                 <div className="lightbox-actions">
                   <button 
                     type="button" 
+                    className="ai-analyze-btn"
+                    onClick={() => handleAnalyzeExistingBottle(selectedPhotoBottle)}
+                    disabled={isAnalyzing}
+                  >
+                    {isAnalyzing ? '⏳ Analyse IA en cours...' : '✨ Réanalyser cette étiquette avec l\'IA'}
+                  </button>
+
+                  <button 
+                    type="button" 
                     className="add-btn lightbox-replace-btn"
                     onClick={() => lightboxFileInputRef.current?.click()}
                   >
@@ -607,6 +730,50 @@ function App() {
         </div>
       )}
 
+      {/* Settings Modal (Gemini API Key) */}
+      {isSettingsOpen && (
+        <div className="modal-overlay" onClick={() => setIsSettingsOpen(false)}>
+          <div className="modal-content glass-panel" onClick={(e) => e.stopPropagation()}>
+            <button className="close-btn" onClick={() => setIsSettingsOpen(false)}>&times;</button>
+            <h2>Configuration de l'IA (Vision)</h2>
+            <p className="settings-desc">
+              L'analyse automatique d'étiquettes utilise <strong>Google Gemini Vision</strong> pour identifier avec précision le domaine, la cuvée, l'appellation, la région et le millésime.
+            </p>
+
+            <form onSubmit={handleSaveApiKey} style={{ marginTop: '1.5rem' }}>
+              <div className="form-group">
+                <label>Clé API Google Gemini (Gratuite)</label>
+                <input 
+                  type="password" 
+                  placeholder="Collez votre clé API (ex: AIzaSy...)"
+                  value={tempApiKey}
+                  onChange={(e) => setTempApiKey(e.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              <div className="api-key-help-box">
+                <p>💡 <strong>Vous n'avez pas encore de clé API ?</strong></p>
+                <p>Elle s'obtient <strong>gratuitement en 30 secondes</strong> sur Google AI Studio :</p>
+                <a 
+                  href="https://aistudio.google.com/app/apikey" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="api-key-link"
+                >
+                  👉 Obtenir ma clé API Gemini gratuite sur Google AI Studio ↗
+                </a>
+              </div>
+
+              <div className="form-actions">
+                <button type="button" className="btn-cancel" onClick={() => setIsSettingsOpen(false)}>Fermer</button>
+                <button type="submit" className="add-btn">Enregistrer la clé</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Modal d'ajout de nouvelle bouteille */}
       {isFormOpen && (
         <div className="modal-overlay" onClick={() => setIsFormOpen(false)}>
@@ -614,9 +781,20 @@ function App() {
             <button className="close-btn" onClick={() => setIsFormOpen(false)}>&times;</button>
             <h2>Nouvelle Bouteille</h2>
             <form onSubmit={handleAddBottle}>
-              {/* Photo Upload in Add Form */}
+              {/* Photo Upload & AI Analysis in Add Form */}
               <div className="form-group form-photo-upload-group">
-                <label>Photo de la bouteille (optionnel - haute résolution)</label>
+                <div className="photo-label-row">
+                  <label>Photo de la bouteille (ou prise de photo smartphone)</label>
+                  <label className="auto-ai-toggle">
+                    <input 
+                      type="checkbox" 
+                      checked={autoAnalyzeOnUpload}
+                      onChange={(e) => setAutoAnalyzeOnUpload(e.target.checked)}
+                    />
+                    <span>Analyse IA auto</span>
+                  </label>
+                </div>
+
                 <div className="form-photo-upload-container">
                   {formPhotoPreview ? (
                     <div className="form-photo-preview-box">
@@ -624,18 +802,29 @@ function App() {
                       <div className="form-photo-actions">
                         <button 
                           type="button" 
-                          className="btn-sm"
-                          onClick={() => formFileInputRef.current?.click()}
+                          className="ai-trigger-btn"
+                          disabled={isAnalyzing}
+                          onClick={() => triggerAiAnalysis(formPhotoPreview)}
                         >
-                          Changer
+                          {isAnalyzing ? '⏳ Analyse en cours...' : '✨ Analyser l\'étiquette avec l\'IA'}
                         </button>
-                        <button 
-                          type="button" 
-                          className="btn-sm btn-danger"
-                          onClick={handleClearFormPhoto}
-                        >
-                          Supprimer
-                        </button>
+                        
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button 
+                            type="button" 
+                            className="btn-sm"
+                            onClick={() => formFileInputRef.current?.click()}
+                          >
+                            Changer
+                          </button>
+                          <button 
+                            type="button" 
+                            className="btn-sm btn-danger"
+                            onClick={handleClearFormPhoto}
+                          >
+                            Supprimer
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -644,8 +833,8 @@ function App() {
                       onClick={() => formFileInputRef.current?.click()}
                     >
                       <span className="dropzone-icon">📷</span>
-                      <span>Cliquez pour choisir une photo de la bouteille</span>
-                      <small className="dropzone-hint">Format JPEG ou PNG (lisibilité nette de l'étiquette conservée)</small>
+                      <span className="dropzone-main-text">Prenez en photo ou choisissez l'étiquette</span>
+                      <small className="dropzone-hint">✨ Les caractéristiques (Domaine, Appellation, Millésime...) seront complétées automatiquement</small>
                     </div>
                   )}
                   <input 
@@ -656,6 +845,20 @@ function App() {
                     onChange={handleFormPhotoChange}
                   />
                 </div>
+
+                {/* AI Status / Success Badge */}
+                {isAnalyzing && (
+                  <div className="ai-status-pulse">
+                    <span className="pulse-dot"></span>
+                    <span>Analyse oenologique par l'IA en cours... Extraction des mentions de l'étiquette</span>
+                  </div>
+                )}
+
+                {aiSuccessBadge && (
+                  <div className="ai-success-banner">
+                    ✨ <strong>Informations extraites par l'IA !</strong> Les champs ci-dessous ont été complétés. Vous pouvez les ajuster si nécessaire.
+                  </div>
+                )}
               </div>
 
               <div className="form-group">
@@ -705,7 +908,7 @@ function App() {
                   <label>Type de vin</label>
                   <input 
                     type="text" 
-                    placeholder="Ex: Champagne, Blanc, Rouge..."
+                    placeholder="Ex: Champagne / Pétillant, Rouge, Blanc sec..."
                     value={newBottle['Type de vin']} 
                     onChange={(e) => handleFormChange('Type de vin', e.target.value)}
                   />
