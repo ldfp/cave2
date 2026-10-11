@@ -3,10 +3,12 @@ import localforage from 'localforage'
 import dbData from './db.json'
 import { compressImage } from './utils/imageUtils'
 import { analyzeWineLabel } from './utils/aiAnalysis'
+import { sendBackupToServer, fetchServerBackup, fetchServerStatus, exportBackupToFile } from './utils/backupService'
 import './App.css'
 
 const STORAGE_KEY = 'cave_bottles_v1'
 const API_KEY_STORAGE = 'cave_gemini_api_key'
+const LAST_BACKUP_STORAGE = 'cave_last_server_backup'
 
 function App() {
   const [bottles, setBottles] = useState([])
@@ -14,6 +16,13 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [regionFilter, setRegionFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+
+  // Server Backup State
+  const [isSavingServer, setIsSavingServer] = useState(false)
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false)
+  const [lastServerBackup, setLastServerBackup] = useState(() => {
+    return localStorage.getItem(LAST_BACKUP_STORAGE) || null
+  })
 
   // AI Configuration State
   const [geminiApiKey, setGeminiApiKey] = useState(() => {
@@ -52,9 +61,30 @@ function App() {
   const formFileInputRef = useRef(null)
   const lightboxFileInputRef = useRef(null)
 
-  // Load initial data from localforage / localStorage or db.json
+  // Load initial data: prioritize Server Backup if available, then IndexedDB/localStorage
   useEffect(() => {
     const loadData = async () => {
+      // 1. Try server backup first
+      try {
+        const serverData = await fetchServerBackup()
+        if (serverData && Array.isArray(serverData.bottles) && serverData.bottles.length > 0) {
+          const normalized = serverData.bottles.map(b => ({
+            ...b,
+            photo: b.photo || b.image || null
+          }))
+          setBottles(normalized)
+          if (serverData.savedAt) {
+            setLastServerBackup(serverData.savedAt)
+            localStorage.setItem(LAST_BACKUP_STORAGE, serverData.savedAt)
+          }
+          setIsLoaded(true)
+          return
+        }
+      } catch (serverErr) {
+        // Normal if running purely static or server not created yet
+      }
+
+      // 2. Try client storage (IndexedDB)
       try {
         const stored = await localforage.getItem(STORAGE_KEY)
         if (stored && Array.isArray(stored) && stored.length > 0) {
@@ -81,7 +111,7 @@ function App() {
         console.error('Erreur chargement données:', err)
       }
 
-      // Default initial from dbData
+      // 3. Default initial from dbData
       const initialData = (dbData.bottles || []).map((b, index) => ({
         ...b,
         id: `initial-${index}`,
@@ -94,7 +124,7 @@ function App() {
     loadData()
   }, [])
 
-  // Persist whenever bottles change after initial load
+  // Persist to client storage whenever bottles change
   useEffect(() => {
     if (!isLoaded) return
 
@@ -119,9 +149,54 @@ function App() {
     setToastMessage(msg)
     setTimeout(() => {
       setToastMessage(null)
-    }, 3500)
+    }, 4000)
   }
 
+  // Save to Server
+  const handleSaveToServer = async () => {
+    setIsSavingServer(true)
+    try {
+      const res = await sendBackupToServer(bottles)
+      const saveDate = res.savedAt || new Date().toISOString()
+      setLastServerBackup(saveDate)
+      localStorage.setItem(LAST_BACKUP_STORAGE, saveDate)
+      showToast(`💾 Sauvegarde réussie sur le serveur ! (${bottles.length} bouteilles & photos persistées)`)
+    } catch (err) {
+      console.error(err)
+      showToast(`⚠️ Erreur sauvegarde serveur : ${err.message}. Export local proposé.`)
+      setIsBackupModalOpen(true)
+    } finally {
+      setIsSavingServer(false)
+    }
+  }
+
+  // Restore from Server
+  const handleRestoreFromServer = async () => {
+    try {
+      const serverData = await fetchServerBackup()
+      if (!serverData || !Array.isArray(serverData.bottles) || serverData.bottles.length === 0) {
+        showToast("ℹ️ Aucune sauvegarde trouvée sur le serveur.")
+        return
+      }
+
+      const normalized = serverData.bottles.map(b => ({
+        ...b,
+        photo: b.photo || b.image || null
+      }))
+      setBottles(normalized)
+      if (serverData.savedAt) {
+        setLastServerBackup(serverData.savedAt)
+        localStorage.setItem(LAST_BACKUP_STORAGE, serverData.savedAt)
+      }
+      setIsBackupModalOpen(false)
+      showToast(`🔄 Restauration réussie ! (${normalized.length} références rechargées depuis le serveur)`)
+    } catch (err) {
+      console.error(err)
+      showToast(`❌ Impossible de restaurer : ${err.message}`)
+    }
+  }
+
+  // Save API key
   const handleSaveApiKey = (e) => {
     e.preventDefault()
     const cleaned = tempApiKey.trim()
@@ -214,7 +289,7 @@ function App() {
       if (selectedPhotoBottle && selectedPhotoBottle.id === bottleId) {
         setSelectedPhotoBottle(prev => ({ ...prev, photo: compressedDataUrl, image: compressedDataUrl }))
       }
-      showToast('📸 Photo haute définition enregistrée !')
+      showToast('📸 Photo haute définition enregistrée ! Pensez à cliquer sur "Sauvegarder sur le serveur".')
     } catch (err) {
       console.error(err)
       showToast('❌ Erreur lors du chargement de la photo.')
@@ -297,7 +372,6 @@ function App() {
       setFormPhotoPreview(compressedDataUrl)
       setNewBottle(prev => ({ ...prev, photo: compressedDataUrl, image: compressedDataUrl }))
 
-      // Trigger automatic AI analysis if enabled
       if (autoAnalyzeOnUpload) {
         triggerAiAnalysis(compressedDataUrl)
       }
@@ -336,7 +410,7 @@ function App() {
     })
     setFormPhotoPreview(null)
     setAiSuccessBadge(false)
-    showToast('✨ Bouteille ajoutée au catalogue !')
+    showToast('✨ Bouteille ajoutée ! Pensez à cliquer sur "Sauvegarder sur le serveur".')
   }
 
   const handleFormChange = (field, value) => {
@@ -379,6 +453,22 @@ function App() {
     setIsZoomed(false)
   }
 
+  const formatLastBackupDate = (isoStr) => {
+    if (!isoStr) return 'Aucune sauvegarde effectuée'
+    try {
+      const d = new Date(isoStr)
+      return d.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    } catch (e) {
+      return isoStr
+    }
+  }
+
   return (
     <div className="app-container">
       {/* Toast Notification */}
@@ -392,8 +482,35 @@ function App() {
         <div className="header-title-box">
           <h1 className="gradient-text">Gestion de ma cave</h1>
           <p className="subtitle">Visualisez, personnalisez et gérez votre collection de vins</p>
+          {lastServerBackup && (
+            <span className="backup-timestamp-badge" onClick={() => setIsBackupModalOpen(true)} title="Cliquez pour gérer les sauvegardes">
+              💾 Serveur synchronisé : {formatLastBackupDate(lastServerBackup)}
+            </span>
+          )}
         </div>
         <div className="header-actions">
+          {/* Main Save to Server Button */}
+          <button 
+            className="save-server-btn" 
+            onClick={handleSaveToServer}
+            disabled={isSavingServer}
+            title="Envoyer une sauvegarde complète de vos bouteilles et photos sur votre serveur 192.168.1.12"
+          >
+            {isSavingServer ? (
+              <>⏳ Sauvegarde en cours...</>
+            ) : (
+              <>💾 Sauvegarder sur le serveur</>
+            )}
+          </button>
+
+          <button 
+            className="backup-options-btn" 
+            onClick={() => setIsBackupModalOpen(true)}
+            title="Options de sauvegarde et restauration"
+          >
+            ⚙️ Sauvegardes
+          </button>
+
           <button 
             className="settings-btn" 
             onClick={() => {
@@ -402,8 +519,9 @@ function App() {
             }}
             title="Configuration IA (Clé API Gemini)"
           >
-            ⚙️ {geminiApiKey ? 'IA Active ✨' : 'Configurer IA'}
+            🤖 {geminiApiKey ? 'IA Active ✨' : 'Configurer IA'}
           </button>
+
           <button className="add-btn" onClick={() => setIsFormOpen(true)}>
             <span className="btn-icon">+</span> Ajouter une bouteille
           </button>
@@ -429,7 +547,7 @@ function App() {
         <section className="recent-bottles glass-panel">
           <div className="section-header">
             <h2>Mon Inventaire</h2>
-            <span className="hint-pill">💡 Importez une photo pour remplir automatiquement les caractéristiques avec l'IA</span>
+            <span className="hint-pill">💡 Cliquez sur "Sauvegarder sur le serveur" pour garder vos données et photos à l'abri</span>
           </div>
           
           <div className="filters-container">
@@ -725,6 +843,68 @@ function App() {
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup & Remanence Modal */}
+      {isBackupModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsBackupModalOpen(false)}>
+          <div className="modal-content glass-panel" onClick={(e) => e.stopPropagation()}>
+            <button className="close-btn" onClick={() => setIsBackupModalOpen(false)}>&times;</button>
+            <h2>Gestion des Sauvegardes & Rémanence</h2>
+            <p className="settings-desc">
+              Sauvegardez l'intégralité de vos bouteilles et photos directement sur le disque dur de votre serveur (192.168.1.12). 
+              Vos données restent persistées en permanence, même si vous videz l'historique de votre navigateur ou changez d'appareil.
+            </p>
+
+            <div className="backup-modal-status-box">
+              <div className="backup-status-row">
+                <span className="backup-status-label">Dernière sauvegarde serveur :</span>
+                <span className="backup-status-value">{formatLastBackupDate(lastServerBackup)}</span>
+              </div>
+              <div className="backup-status-row">
+                <span className="backup-status-label">Bouteilles en mémoire :</span>
+                <span className="backup-status-value">{bottles.length} référence(s)</span>
+              </div>
+            </div>
+
+            <div className="backup-modal-actions-list">
+              <button 
+                type="button" 
+                className="btn-backup-action primary"
+                disabled={isSavingServer}
+                onClick={async () => {
+                  await handleSaveToServer()
+                  setIsBackupModalOpen(false)
+                }}
+              >
+                {isSavingServer ? '⏳ Sauvegarde sur le serveur en cours...' : '💾 Sauvegarder sur le serveur maintenant'}
+              </button>
+
+              <button 
+                type="button" 
+                className="btn-backup-action secondary"
+                onClick={handleRestoreFromServer}
+              >
+                🔄 Restaurer depuis la sauvegarde du serveur
+              </button>
+
+              <button 
+                type="button" 
+                className="btn-backup-action outline"
+                onClick={() => {
+                  exportBackupToFile(bottles)
+                  showToast("📥 Fichier de secours exporté sur votre appareil !")
+                }}
+              >
+                📥 Télécharger une archive locale (.JSON de secours)
+              </button>
+            </div>
+
+            <div className="form-actions">
+              <button type="button" className="btn-cancel" onClick={() => setIsBackupModalOpen(false)}>Fermer</button>
             </div>
           </div>
         </div>
