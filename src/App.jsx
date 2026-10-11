@@ -2,12 +2,15 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import localforage from 'localforage'
 import dbData from './db.json'
 import { compressImage } from './utils/imageUtils'
-import { analyzeWineLabel } from './utils/aiAnalysis'
+import { analyzeWineLabel, DEFAULT_NOUS_MODELS } from './utils/aiAnalysis'
 import { sendBackupToServer, fetchServerBackup, exportBackupToFile } from './utils/backupService'
 import './App.css'
 
 const STORAGE_KEY = 'cave_bottles_v1'
-const API_KEY_STORAGE = 'cave_gemini_api_key'
+const AI_PROVIDER_STORAGE = 'cave_ai_provider'
+const NOUS_API_KEY_STORAGE = 'cave_nous_api_key'
+const NOUS_MODEL_STORAGE = 'cave_nous_model'
+const GEMINI_API_KEY_STORAGE = 'cave_gemini_api_key'
 const LAST_BACKUP_STORAGE = 'cave_last_server_backup'
 
 function App() {
@@ -35,12 +38,25 @@ function App() {
     extractedData: null
   })
 
-  // AI Configuration State
-  const [geminiApiKey, setGeminiApiKey] = useState(() => {
-    return localStorage.getItem(API_KEY_STORAGE) || import.meta.env.VITE_GEMINI_API_KEY || ''
+  // AI Configuration State (Nous Portal by default, or Gemini)
+  const [aiProvider, setAiProvider] = useState(() => {
+    return localStorage.getItem(AI_PROVIDER_STORAGE) || 'nous'
   })
+  const [nousApiKey, setNousApiKey] = useState(() => {
+    return localStorage.getItem(NOUS_API_KEY_STORAGE) || import.meta.env.VITE_NOUS_API_KEY || ''
+  })
+  const [nousModel, setNousModel] = useState(() => {
+    return localStorage.getItem(NOUS_MODEL_STORAGE) || 'google/gemini-2.5-flash'
+  })
+  const [geminiApiKey, setGeminiApiKey] = useState(() => {
+    return localStorage.getItem(GEMINI_API_KEY_STORAGE) || import.meta.env.VITE_GEMINI_API_KEY || ''
+  })
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [tempApiKey, setTempApiKey] = useState(geminiApiKey)
+  const [tempProvider, setTempProvider] = useState(aiProvider)
+  const [tempNousApiKey, setTempNousApiKey] = useState(nousApiKey)
+  const [tempNousModel, setTempNousModel] = useState(nousModel)
+  const [tempGeminiApiKey, setTempGeminiApiKey] = useState(geminiApiKey)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [autoAnalyzeOnUpload, setAutoAnalyzeOnUpload] = useState(true)
 
@@ -217,14 +233,50 @@ function App() {
     showToast('🗑️ Bouteille supprimée de la cave. Pensez à "Sauvegarder sur le serveur".')
   }
 
-  // Save API key
-  const handleSaveApiKey = (e) => {
+  // Check if active AI provider is configured
+  const isAiConfigured = () => {
+    if (aiProvider === 'nous') {
+      return Boolean(nousApiKey && nousApiKey.trim())
+    }
+    return Boolean(geminiApiKey && geminiApiKey.trim())
+  }
+
+  const getAiConfig = () => ({
+    provider: aiProvider,
+    nousApiKey,
+    nousModel,
+    geminiApiKey
+  })
+
+  const openAiSettings = () => {
+    setTempProvider(aiProvider)
+    setTempNousApiKey(nousApiKey)
+    setTempNousModel(nousModel)
+    setTempGeminiApiKey(geminiApiKey)
+    setIsSettingsOpen(true)
+  }
+
+  // Save AI settings
+  const handleSaveAiSettings = (e) => {
     e.preventDefault()
-    const cleaned = tempApiKey.trim()
-    setGeminiApiKey(cleaned)
-    localStorage.setItem(API_KEY_STORAGE, cleaned)
+    const cleanedNousKey = tempNousApiKey.trim()
+    const cleanedGeminiKey = tempGeminiApiKey.trim()
+    const selectedModel = tempNousModel.trim() || 'google/gemini-2.5-flash'
+
+    setAiProvider(tempProvider)
+    setNousApiKey(cleanedNousKey)
+    setNousModel(selectedModel)
+    setGeminiApiKey(cleanedGeminiKey)
+
+    localStorage.setItem(AI_PROVIDER_STORAGE, tempProvider)
+    localStorage.setItem(NOUS_API_KEY_STORAGE, cleanedNousKey)
+    localStorage.setItem(NOUS_MODEL_STORAGE, selectedModel)
+    localStorage.setItem(GEMINI_API_KEY_STORAGE, cleanedGeminiKey)
+
     setIsSettingsOpen(false)
-    showToast("🔑 Clé API Gemini enregistrée !")
+    showToast(tempProvider === 'nous' 
+      ? "🟣 Paramètres Nous Portal (portal.nousresearch.com) enregistrés !" 
+      : "🔵 Paramètres Google Gemini enregistrés !")
   }
 
   // Options for filters
@@ -258,10 +310,11 @@ function App() {
 
   // AI Analysis Execution for Form
   const triggerAiAnalysis = async (imageDataUrl) => {
-    if (!geminiApiKey) {
-      setTempApiKey('')
-      setIsSettingsOpen(true)
-      showToast("⚠️ Veuillez renseigner votre clé API Gemini pour l'analyse IA.")
+    if (!isAiConfigured()) {
+      openAiSettings()
+      showToast(aiProvider === 'nous' 
+        ? "⚠️ Veuillez renseigner votre clé API Nous Portal (portal.nousresearch.com)." 
+        : "⚠️ Veuillez renseigner votre clé API Google Gemini.")
       return
     }
 
@@ -269,8 +322,10 @@ function App() {
     setAiSuccessBadge(false)
 
     try {
-      showToast("🤖 Analyse de l'étiquette en cours par l'IA...")
-      const result = await analyzeWineLabel(imageDataUrl, geminiApiKey)
+      showToast(aiProvider === 'nous' 
+        ? "🟣 Analyse en cours via Nous Research..." 
+        : "🤖 Analyse en cours via Google Gemini...")
+      const result = await analyzeWineLabel(imageDataUrl, getAiConfig())
 
       setNewBottle(prev => ({
         ...prev,
@@ -335,10 +390,11 @@ function App() {
       return
     }
 
-    if (!geminiApiKey) {
-      setTempApiKey('')
-      setIsSettingsOpen(true)
-      showToast("⚠️ Veuillez configurer votre clé API Gemini.")
+    if (!isAiConfigured()) {
+      openAiSettings()
+      showToast(aiProvider === 'nous' 
+        ? "⚠️ Veuillez configurer votre clé API Nous Portal (portal.nousresearch.com)." 
+        : "⚠️ Veuillez configurer votre clé API Google Gemini.")
       return
     }
 
@@ -358,7 +414,7 @@ function App() {
     })
 
     try {
-      const result = await analyzeWineLabel(img, geminiApiKey)
+      const result = await analyzeWineLabel(img, getAiConfig())
       setReanalysisModal(prev => ({
         ...prev,
         isLoading: false,
@@ -581,13 +637,10 @@ function App() {
 
           <button 
             className="settings-btn" 
-            onClick={() => {
-              setTempApiKey(geminiApiKey)
-              setIsSettingsOpen(true)
-            }}
-            title="Configuration IA (Clé API Gemini)"
+            onClick={openAiSettings}
+            title={aiProvider === 'nous' ? "Configuration IA (Nous Portal - portal.nousresearch.com)" : "Configuration IA (Google Gemini)"}
           >
-            🤖 {geminiApiKey ? 'IA Active ✨' : 'Configurer IA'}
+            {aiProvider === 'nous' ? '🟣' : '🤖'} {isAiConfigured() ? (aiProvider === 'nous' ? 'Nous IA Active ✨' : 'Gemini Actif ✨') : 'Configurer IA'}
           </button>
 
           <button className="add-btn" onClick={() => setIsFormOpen(true)}>
@@ -1172,44 +1225,124 @@ function App() {
         </div>
       )}
 
-      {/* Settings Modal (Gemini API Key) */}
+      {/* Settings Modal (Nous Portal & Gemini) */}
       {isSettingsOpen && (
         <div className="modal-overlay" onClick={() => setIsSettingsOpen(false)}>
-          <div className="modal-content glass-panel" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content glass-panel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '650px' }}>
             <button className="close-btn" onClick={() => setIsSettingsOpen(false)}>&times;</button>
             <h2>Configuration de l'IA (Vision)</h2>
             <p className="settings-desc">
-              L'analyse automatique d'étiquettes utilise <strong>Google Gemini Vision</strong> pour identifier avec précision le domaine, la cuvée, l'appellation, la région et le millésime.
+              Sélectionnez le fournisseur d'IA pour analyser automatiquement les étiquettes et extraire le domaine, la cuvée, la région, l'appellation et le millésime.
             </p>
 
-            <form onSubmit={handleSaveApiKey} style={{ marginTop: '1.5rem' }}>
-              <div className="form-group">
-                <label>Clé API Google Gemini (Gratuite)</label>
-                <input 
-                  type="password" 
-                  placeholder="Collez votre clé API (ex: AIzaSy...)"
-                  value={tempApiKey}
-                  onChange={(e) => setTempApiKey(e.target.value)}
-                  autoFocus
-                />
-              </div>
+            {/* Provider Tabs */}
+            <div className="provider-tabs">
+              <button 
+                type="button" 
+                className={`provider-tab-btn ${tempProvider === 'nous' ? 'active' : ''}`}
+                onClick={() => setTempProvider('nous')}
+              >
+                🟣 Nous Research <span className="nous-badge-highlight">Recommandé</span>
+              </button>
+              <button 
+                type="button" 
+                className={`provider-tab-btn ${tempProvider === 'gemini' ? 'active' : ''}`}
+                onClick={() => setTempProvider('gemini')}
+              >
+                🔵 Google Gemini Direct
+              </button>
+            </div>
 
-              <div className="api-key-help-box">
-                <p>💡 <strong>Vous n'avez pas encore de clé API ?</strong></p>
-                <p>Elle s'obtient <strong>gratuitement en 30 secondes</strong> sur Google AI Studio :</p>
-                <a 
-                  href="https://aistudio.google.com/app/apikey" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="api-key-link"
-                >
-                  👉 Obtenir ma clé API Gemini gratuite sur Google AI Studio ↗
-                </a>
-              </div>
+            <form onSubmit={handleSaveAiSettings}>
+              {tempProvider === 'nous' ? (
+                <>
+                  <div className="form-group">
+                    <label>Clé API Nous Portal (portal.nousresearch.com)</label>
+                    <input 
+                      type="password" 
+                      placeholder="Collez votre clé API Nous Portal..."
+                      value={tempNousApiKey}
+                      onChange={(e) => setTempNousApiKey(e.target.value)}
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Modèle Vision (Inférence Nous)</label>
+                    <select 
+                      value={DEFAULT_NOUS_MODELS.some(m => m.id === tempNousModel) ? tempNousModel : 'custom'}
+                      onChange={(e) => {
+                        if (e.target.value !== 'custom') {
+                          setTempNousModel(e.target.value)
+                        }
+                      }}
+                    >
+                      {DEFAULT_NOUS_MODELS.map(m => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                      <option value="custom">Autre modèle personnalisé...</option>
+                    </select>
+                  </div>
+
+                  {(!DEFAULT_NOUS_MODELS.some(m => m.id === tempNousModel) || tempNousModel === '') && (
+                    <div className="form-group" style={{ marginTop: '0.5rem' }}>
+                      <label>Identifiant du modèle personnalisé</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ex: openai/gpt-4o, anthropic/claude-sonnet-5.5..."
+                        value={tempNousModel}
+                        onChange={(e) => setTempNousModel(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  <div className="api-key-help-box">
+                    <p>💡 <strong>Connexion à votre compte Nous Portal :</strong></p>
+                    <p>Récupérez votre clé d'API directement sur votre tableau de bord Nous Research :</p>
+                    <a 
+                      href="https://portal.nousresearch.com/" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="api-key-link"
+                    >
+                      👉 Accéder à mon compte sur portal.nousresearch.com ↗
+                    </a>
+                    <small style={{ color: 'var(--text-secondary)', marginTop: '0.4rem', display: 'block' }}>
+                      L'application se connecte directement à l'API OpenAI-compatible de Nous (inference-api.nousresearch.com/v1) pour analyser vos photos.
+                    </small>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="form-group">
+                    <label>Clé API Google Gemini (Gratuite)</label>
+                    <input 
+                      type="password" 
+                      placeholder="Collez votre clé API (ex: AIzaSy...)"
+                      value={tempGeminiApiKey}
+                      onChange={(e) => setTempGeminiApiKey(e.target.value)}
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="api-key-help-box">
+                    <p>💡 <strong>Vous n'avez pas encore de clé API Google ?</strong></p>
+                    <p>Elle s'obtient <strong>gratuitement</strong> sur Google AI Studio :</p>
+                    <a 
+                      href="https://aistudio.google.com/app/apikey" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="api-key-link"
+                    >
+                      👉 Obtenir ma clé API Gemini sur Google AI Studio ↗
+                    </a>
+                  </div>
+                </>
+              )}
 
               <div className="form-actions">
                 <button type="button" className="btn-cancel" onClick={() => setIsSettingsOpen(false)}>Fermer</button>
-                <button type="submit" className="add-btn">Enregistrer la clé</button>
+                <button type="submit" className="add-btn">Enregistrer la configuration</button>
               </div>
             </form>
           </div>
